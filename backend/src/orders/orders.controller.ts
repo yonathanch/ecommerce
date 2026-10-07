@@ -7,7 +7,8 @@ import {
   UseGuards,
   Request,
 } from '@nestjs/common'
-import { OrdersService, CreateOrderDto } from './orders.service'
+import { OrdersService } from './orders.service'
+import { CreateOrderDto } from './dto/create-order.dto'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 
 @Controller('orders')

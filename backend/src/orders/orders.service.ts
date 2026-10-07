@@ -1,12 +1,8 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
+import { CreateOrderDto } from './dto/create-order.dto'
 
-export interface CreateOrderDto {
-  items: {
-    productId: string
-    quantity: number
-  }[]
-}
+export type { CreateOrderDto }
 
 @Injectable()
 export class OrdersService {

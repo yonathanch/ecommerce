@@ -1,34 +1,18 @@
 import { Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
+import {
+  CreateProductDto,
+  UpdateProductDto,
+  ListProductsQueryDto,
+} from './dto/product.dto'
 
-export interface CreateProductDto {
-  name: string
-  description?: string
-  price: number
-  stock?: number
-  category?: string
-}
-
-export interface UpdateProductDto {
-  name?: string
-  description?: string
-  price?: number
-  stock?: number
-  category?: string
-}
-
-export interface FindProductsQuery {
-  search?: string
-  category?: string
-  page?: number
-  limit?: number
-}
+export type { CreateProductDto, UpdateProductDto }
 
 @Injectable()
 export class ProductsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll(query: FindProductsQuery) {
+  async findAll(query: ListProductsQueryDto) {
     const page = Math.max(1, Number(query.page) || 1)
     const limit = Math.min(100, Math.max(1, Number(query.limit) || 20))
     const skip = (page - 1) * limit

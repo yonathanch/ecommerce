@@ -1,8 +1,19 @@
 import { NestFactory } from '@nestjs/core';
+import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Validate and strip incoming request bodies globally.
+  // whitelist: removes unknown properties; transform: coerces primitives to DTO types.
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
 
   app.enableCors({
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
@@ -11,7 +22,9 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api');
 
-  const port = process.env.PORT || 5000;
+  // Parse PORT defensively: shell environments may export invalid values like "0".
+  const parsedPort = Number(process.env.PORT);
+  const port = Number.isInteger(parsedPort) && parsedPort > 0 ? parsedPort : 3001;
   await app.listen(port);
 
   console.log(`🚀 Backend running on http://localhost:${port}/api`);

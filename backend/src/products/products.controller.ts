@@ -9,7 +9,12 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common'
-import { ProductsService, CreateProductDto, UpdateProductDto, FindProductsQuery } from './products.service'
+import { ProductsService } from './products.service'
+import {
+  CreateProductDto,
+  UpdateProductDto,
+  ListProductsQueryDto,
+} from './dto/product.dto'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 
 @Controller('products')
@@ -17,7 +22,7 @@ export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   @Get()
-  async findAll(@Query() query: FindProductsQuery) {
+  async findAll(@Query() query: ListProductsQueryDto) {
     return this.productsService.findAll(query)
   }
 

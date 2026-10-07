@@ -7,7 +7,7 @@ Modern single-vendor e-commerce platform with AI shopping assistant.
 ## Structure
 
 ```
-├── backend/     NestJS REST API (port 3001, prefix /api)
+├── backend/     NestJS REST API (port 3002, prefix /api)
 ├── frontend/    Next.js app (port 3000)
 └── docker-compose.yml   PostgreSQL 16 + Redis 7
 ```
@@ -41,7 +41,7 @@ npm run prisma:seed           # optional: seed sample data
 ## Running in development
 
 ```bash
-# terminal 1 — backend (http://localhost:3001/api)
+# terminal 1 — backend (http://localhost:3002/api)
 cd backend && npm run dev
 
 # terminal 2 — frontend (http://localhost:3000)

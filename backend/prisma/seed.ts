@@ -30,6 +30,26 @@ async function main() {
     },
   })
 
+  // Categories
+  const categoryNames = [
+    'Electronics',
+    'Appliances',
+    'Sports',
+    'Home',
+    'Accessories',
+    'Furniture',
+  ]
+  const categories: Record<string, string> = {}
+  for (const name of categoryNames) {
+    const slug = name.toLowerCase()
+    const cat = await prisma.category.upsert({
+      where: { name },
+      update: {},
+      create: { name, slug },
+    })
+    categories[name] = cat.id
+  }
+
   // Products
   const products = [
     { name: 'Wireless Headphones', description: 'Noise-cancelling over-ear headphones', price: 199.99, stock: 50, category: 'Electronics' },
@@ -47,7 +67,12 @@ async function main() {
   ]
 
   for (const product of products) {
-    await prisma.product.create({ data: product }).catch(() => {});
+    const { category, ...data } = product
+    const exists = await prisma.product.findFirst({ where: { name: data.name } })
+    if (exists) continue
+    await prisma.product.create({
+      data: { ...data, categoryId: categories[category] },
+    })
   }
 
   console.log('✅ Seeded users and products')

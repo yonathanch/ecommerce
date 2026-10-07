@@ -27,7 +27,7 @@ async function bootstrap() {
 
   // Parse PORT defensively: shell environments may export invalid values like "0".
   const parsedPort = Number(process.env.PORT);
-  const port = Number.isInteger(parsedPort) && parsedPort > 0 ? parsedPort : 3001;
+  const port = Number.isInteger(parsedPort) && parsedPort > 0 ? parsedPort : 3002;
   await app.listen(port);
 
   console.log(`🚀 Backend running on http://localhost:${port}/api`);

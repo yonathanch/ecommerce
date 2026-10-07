@@ -37,7 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     // Revoke the refresh token server-side (fire-and-forget; cookie cleared by server)
-    fetch((process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api') + '/auth/logout', {
+    fetch((process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002/api') + '/auth/logout', {
       method: 'POST',
       credentials: 'include',
     }).catch(() => {})

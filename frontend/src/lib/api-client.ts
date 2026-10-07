@@ -1,7 +1,7 @@
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios'
 
 const apiClient: AxiosInstance = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api',
+  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002/api',
   timeout: 10000,
   withCredentials: true, // send httpOnly refresh cookie
   headers: {
@@ -24,7 +24,7 @@ let refreshPromise: Promise<string | null> | null = null
 async function performRefresh(): Promise<string | null> {
   try {
     const res = await axios.post(
-      (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api') + '/auth/refresh',
+      (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002/api') + '/auth/refresh',
       {},
       { withCredentials: true },
     )

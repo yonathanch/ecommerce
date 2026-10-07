@@ -8,6 +8,11 @@ import {
   MinLength,
   MaxLength,
   IsInt,
+  IsIn,
+  IsArray,
+  ValidateNested,
+  IsUrl,
+  IsObject,
 } from 'class-validator'
 
 export class CreateProductDto {
@@ -30,10 +35,51 @@ export class CreateProductDto {
   @Min(0)
   stock?: number
 
-  @IsOptional()
   @IsString()
+  @MinLength(1)
   @MaxLength(100)
-  category?: string
+  category: string
+
+  @IsOptional()
+  @IsArray()
+  @IsUrl({}, { each: true })
+  imageUrls?: string[]
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateVariantDto)
+  variants?: CreateVariantDto[]
+}
+
+export class CreateVariantDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(64)
+  sku: string
+
+  @IsOptional()
+  @IsObject()
+  options?: Record<string, string>
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  price?: number
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  stock?: number
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  weight?: number
+
+  @IsOptional()
+  @IsUrl()
+  imageUrl?: string
 }
 
 export class UpdateProductDto {
@@ -60,9 +106,13 @@ export class UpdateProductDto {
 
   @IsOptional()
   @IsString()
+  @MinLength(1)
   @MaxLength(100)
   category?: string
 }
+
+export const SORTABLE_FIELDS = ['name', 'price', 'createdAt'] as const
+export type SortableField = (typeof SORTABLE_FIELDS)[number]
 
 export class ListProductsQueryDto {
   @IsOptional()
@@ -72,6 +122,14 @@ export class ListProductsQueryDto {
   @IsOptional()
   @IsString()
   category?: string
+
+  @IsOptional()
+  @IsIn([...SORTABLE_FIELDS])
+  sortBy?: SortableField
+
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc'
 
   // Query params arrive as strings; @Type converts them before validation.
   @IsOptional()

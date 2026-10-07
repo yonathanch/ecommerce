@@ -27,7 +27,8 @@ export function LoginForm() {
   const onSubmit = async (data: LoginForm) => {
     try {
       const res = await axios.post('/auth/login', data)
-      login(res.data.token, res.data.user)
+      const { accessToken, refreshToken: _r, ...user } = res.data
+      login(accessToken, user)
       router.push('/products')
     } catch (e) {
       setMsg('Error: ' + (e as any).response?.data?.message)

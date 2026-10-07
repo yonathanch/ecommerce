@@ -16,7 +16,25 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  refreshTokens RefreshToken[]
+
   @@map("users")
+}
+
+// Server-side session for refresh token rotation and revocation.
+// One row per active refresh token; deleting/flagging rows invalidates sessions.
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  // sha256 of the refresh token — the raw token never touches the database
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
 }
 
 model Product {

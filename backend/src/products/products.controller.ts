@@ -16,6 +16,8 @@ import {
   ListProductsQueryDto,
 } from './dto/product.dto'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
+import { RolesGuard, Roles } from '../auth/roles.guard'
+import { Role } from '@prisma/client'
 
 @Controller('products')
 export class ProductsController {
@@ -37,19 +39,22 @@ export class ProductsController {
   }
 
   @Post()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
   async create(@Body() dto: CreateProductDto) {
     return this.productsService.create(dto)
   }
 
   @Put(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
   async update(@Param('id') id: string, @Body() dto: UpdateProductDto) {
     return this.productsService.update(id, dto)
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
   async remove(@Param('id') id: string) {
     return this.productsService.remove(id)
   }

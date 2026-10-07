@@ -28,7 +28,8 @@ export function SignupForm() {
   const onSubmit = async (data: SignupForm) => {
     try {
       const res = await axios.post('/auth/signup', data)
-      login(res.data.token, res.data.user)
+      const { accessToken, refreshToken: _r, ...user } = res.data
+      login(accessToken, user)
       router.push('/products')
     } catch (e) {
       setMsg('Error: ' + (e as any).response?.data?.message)

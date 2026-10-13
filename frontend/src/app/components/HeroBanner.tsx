@@ -5,46 +5,46 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 
 const slides = [
   {
-    eyebrow: 'Best Deal Online on smart watches',
-    title: 'SMART WEARABLE.',
-    subtitle: 'UP to 80% OFF',
-    image: 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?w=700&h=700&fit=crop',
-  },
-  {
-    eyebrow: 'Best Deal Online on smartphones',
-    title: 'FLAGSHIP PHONES.',
-    subtitle: 'UP to 56% OFF',
-    image: 'https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?w=700&h=700&fit=crop',
-  },
-  {
-    eyebrow: 'Best Deal Online on home essentials',
-    title: 'SMART LIVING.',
-    subtitle: 'UP to 50% OFF',
-    image: 'https://images.unsplash.com/photo-1556228453-efd6c1ff04f6?w=700&h=700&fit=crop',
-  },
-  {
     eyebrow: 'Best Deal Online on fashion',
     title: 'TRENDY STYLE.',
     subtitle: 'UP to 70% OFF',
     image: 'https://images.unsplash.com/photo-1445205170230-053b83016050?w=700&h=700&fit=crop',
   },
   {
-    eyebrow: 'Best Deal Online on groceries',
-    title: 'FRESH DAILY.',
-    subtitle: 'UP to 40% OFF',
-    image: 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=700&h=700&fit=crop',
-  },
-  {
-    eyebrow: 'Best Deal Online on audio',
-    title: 'PREMIUM SOUND.',
+    eyebrow: 'Best Deal Online on womenswear',
+    title: 'CHIC LOOKS.',
     subtitle: 'UP to 60% OFF',
-    image: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=700&h=700&fit=crop',
+    image: 'https://images.unsplash.com/photo-1490481651871-ab68de25d43d?w=700&h=700&fit=crop',
   },
   {
-    eyebrow: 'Best Deal Online on laptops',
-    title: 'POWER MACHINE.',
+    eyebrow: 'Best Deal Online on menswear',
+    title: 'SHARP FITS.',
+    subtitle: 'UP to 55% OFF',
+    image: 'https://images.unsplash.com/photo-1490578474895-699cd4e2cf59?w=700&h=700&fit=crop',
+  },
+  {
+    eyebrow: 'Best Deal Online on kids fashion',
+    title: 'LITTLE TRENDSETTERS.',
+    subtitle: 'UP to 50% OFF',
+    image: 'https://images.unsplash.com/photo-1503944583220-79d8926ad5e2?w=700&h=700&fit=crop',
+  },
+  {
+    eyebrow: 'Best Deal Online on sneakers',
+    title: 'FRESH KICKS.',
     subtitle: 'UP to 45% OFF',
-    image: 'https://images.unsplash.com/photo-1496181133206-80ce9b88a853?w=700&h=700&fit=crop',
+    image: 'https://images.unsplash.com/photo-1549298916-b41d501d3772?w=700&h=700&fit=crop',
+  },
+  {
+    eyebrow: 'Best Deal Online on outerwear',
+    title: 'COZY LAYERS.',
+    subtitle: 'UP to 65% OFF',
+    image: 'https://images.unsplash.com/photo-1551028719-00167b16eac5?w=700&h=700&fit=crop',
+  },
+  {
+    eyebrow: 'Best Deal Online on accessories',
+    title: 'FINISH THE LOOK.',
+    subtitle: 'UP to 40% OFF',
+    image: 'https://images.unsplash.com/photo-1523779917675-b6ed3a42a561?w=700&h=700&fit=crop',
   },
 ]
 

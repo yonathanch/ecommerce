@@ -1,6 +1,7 @@
 'use client'
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { resetCart } from '@/lib/cart-service'
 
 interface AuthContextType {
   token: string | null
@@ -45,6 +46,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    // The cart lives on the server, so drop the local view of it.
+    resetCart()
   }
 
   return (

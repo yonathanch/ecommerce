@@ -20,7 +20,7 @@ export default function Home() {
         {/* Top Categories */}
         <CategoryIcons />
 
-        {/* Top Brands */}
+        {/* Top Popular Brand — name + link per brand */}
         <FeaturedBrands />
 
         {/* Daily Essentials */}

@@ -17,6 +17,14 @@ model User {
   updatedAt DateTime @updatedAt
 
   refreshTokens RefreshToken[]
+  carts       Cart[]
+  wishlists   Wishlist[]
+  addresses   Address[]
+  orders      Order[]
+  couponUsages CouponUsage[]
+  inventoryTransactions InventoryTransaction[]
+  reservations StockReservation[]
+  notifications Notification[]
 
   @@map("users")
 }
@@ -46,13 +54,32 @@ model Product {
   updatedAt   DateTime @updatedAt
   categoryId  String
   category    Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  brandId     String?
+  brand       Brand?   @relation(fields: [brandId], references: [id], onDelete: SetNull)
   stock       Int      @default(0)
 
   images   ProductImage[]
   variants ProductVariant[]
+  cartItems  CartItem[]
+  wishlistItems WishlistItem[]
+  reservations StockReservation[]
 
   @@index([categoryId])
+  @@index([brandId])
   @@map("products")
+}
+
+// In-house fashion label shown in the "Top Fashion Brands" section. Each brand
+// gets its own page (/brands/<slug>) listing its products; products created
+// without a label keep a null brandId instead of failing validation.
+model Brand {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  products  Product[]
+
+  @@map("brands")
 }
 
 model Category {
@@ -97,16 +124,241 @@ model ProductVariant {
   @@map("product_variants")
 }
 
+// Shopping cart (server-side, per authenticated user)
+model Cart {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  items     CartItem[]
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("carts")
+}
+
+model CartItem {
+  id        String   @id @default(cuid())
+  cartId    String
+  productId String
+  quantity  Int      @default(1)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+
+  @@unique([cartId, productId])
+  @@index([cartId])
+  @@map("cart_items")
+}
+
+// Wishlist (server-side, per authenticated user)
+model Wishlist {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  items     WishlistItem[]
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("wishlists")
+}
+
+model WishlistItem {
+  id        String   @id @default(cuid())
+  wishlistId String
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  wishlist  Wishlist @relation(fields: [wishlistId], references: [id], onDelete: Cascade)
+
+  @@unique([wishlistId, productId])
+  @@index([wishlistId])
+  @@map("wishlist_items")
+}
+
+// Coupon + usage tracking
+model Coupon {
+  id        String      @id @default(cuid())
+  code      String      @unique
+  type      String      // PERCENT | FIXED
+  value     Float
+  minPurchase Float?
+  maxDiscount Float?
+  usageLimit Int?
+  usedCount Int         @default(0)
+  expiresAt DateTime?
+  active    Boolean     @default(true)
+  usages    CouponUsage[]
+
+  @@map("coupons")
+}
+
+model CouponUsage {
+  id        String   @id @default(cuid())
+  couponId  String
+  userId    String
+  orderId   String?
+  createdAt DateTime @default(now())
+  coupon    Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order     Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@unique([couponId, userId])
+  @@index([couponId])
+  @@map("coupon_usages")
+}
+
+// Shipping address, owned by one user. Orders keep an immutable snapshot so
+// editing/deleting an address never rewrites order history.
+model Address {
+  id         String   @id @default(cuid())
+  userId     String
+  label      String?
+  recipient  String
+  phone      String
+  line1      String
+  line2      String?
+  city       String
+  province   String?
+  postalCode String?
+  country    String   @default("Indonesia")
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders Order[]
+
+  @@index([userId])
+  @@map("addresses")
+}
+
 model Order {
   id         String      @id @default(cuid())
   userId     String
+  subtotal   Float       @default(0)
+  discount   Float       @default(0)
   totalPrice Float
+  couponCode String?
+  addressId  String?
+  // snapshot of the shipping address at checkout time
+  shippingAddress Json?
   status     OrderStatus @default(PENDING)
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
-  items      OrderItem[]
 
+  // Set when payment is captured; the reservation is consumed in the same
+  // transaction, which is the only point where on-hand stock is reduced.
+  paidAt  DateTime?
+  expiresAt DateTime?
+
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  address Address?    @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  items   OrderItem[]
+  couponUsages CouponUsage[]
+  inventoryTransactions InventoryTransaction[]
+  payments Payment[]
+  reservations StockReservation[]
+
+  @@index([userId])
+  @@index([status])
   @@map("orders")
+}
+
+// Reserved (held) stock for an unpaid order. Creating one never reduces
+// Product.stock — it only lowers the *available* quantity, so an abandoned
+// checkout cannot sell inventory that was actually paid for.
+// Lifecycle: ACTIVE -> CONSUMED (payment captured) | RELEASED (cancel/expiry).
+model StockReservation {
+  id         String            @id @default(cuid())
+  orderId    String
+  productId  String
+  userId     String
+  quantity   Int
+  status     ReservationStatus @default(ACTIVE)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  releasedAt DateTime?
+  createdAt  DateTime          @default(now())
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([productId, status])
+  @@index([orderId])
+  @@index([status, expiresAt])
+  @@map("stock_reservations")
+}
+
+// One row per payment attempt. Card data never reaches this table: only the
+// gateway reference, amount and status returned by the provider.
+model Payment {
+  id            String        @id @default(cuid())
+  orderId       String
+  provider      String        // "mock" | "midtrans" | ...
+  providerRef   String        @unique
+  method        String?
+  amount        Float
+  status        PaymentStatus @default(PENDING)
+  paymentUrl    String?
+  failureReason String?
+  paidAt        DateTime?
+  expiresAt     DateTime?
+  rawPayload    Json?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([status])
+  @@map("payments")
+}
+
+// Inbox of gateway callbacks, used to make webhook handling idempotent: a
+// duplicate event id is recognized and skipped instead of re-applying effects.
+model WebhookEvent {
+  id             String    @id @default(cuid())
+  provider       String
+  eventId        String
+  type           String
+  signatureValid Boolean
+  payload        Json
+  processedAt    DateTime?
+  error          String?
+  createdAt      DateTime  @default(now())
+
+  @@unique([provider, eventId])
+  @@index([type])
+  @@map("webhook_events")
+}
+
+// In-app notification feed. Email/push delivery is queued separately (M9).
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String    // ORDER_PAID | ORDER_CANCELLED | LOW_STOCK | ...
+  title     String
+  body      String
+  meta      Json?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  EXPIRED
+  REFUNDED
+}
+
+enum ReservationStatus {
+  ACTIVE
+  CONSUMED
+  RELEASED
 }
 
 model OrderItem {
@@ -114,12 +366,44 @@ model OrderItem {
   orderId     String
   productId   String
   productName String
+  variantSku  String?
   price       Float
   quantity    Int
   createdAt   DateTime @default(now())
   order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
+  @@index([orderId])
   @@map("order_items")
+}
+
+// Append-only stock ledger. Every movement of stock (checkout deduction, order
+// cancellation restock, manual adjustment) writes one row so overselling can be
+// audited per product/order.
+model InventoryTransaction {
+  id         String             @id @default(cuid())
+  productId  String
+  variantSku String?
+  orderId    String?
+  userId     String?
+  type       InventoryTxType
+  quantity   Int
+  stockBefore Int
+  stockAfter Int
+  reason     String?
+  createdAt  DateTime           @default(now())
+
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  user  User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([productId])
+  @@index([orderId])
+  @@map("inventory_transactions")
+}
+
+enum InventoryTxType {
+  DEDUCT
+  RESTOCK
+  ADJUST
 }
 
 enum OrderStatus {
@@ -128,6 +412,7 @@ enum OrderStatus {
   SHIPPED
   DELIVERED
   CANCELLED
+  REFUNDED
 }
 
 enum Role {

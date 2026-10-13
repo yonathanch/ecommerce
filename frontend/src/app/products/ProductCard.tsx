@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { formatRupiah } from '@/lib/format'
 
 interface Product {
   id: string
@@ -8,7 +9,9 @@ interface Product {
   description?: string
   price: number
   stock: number
+  available?: number
   category: string
+  images?: Array<{ url: string; position?: number }>
 }
 
 interface ProductCardProps {
@@ -16,79 +19,77 @@ interface ProductCardProps {
   featured?: boolean
 }
 
-function getDiscount(name: string, price: number) {
-  let hash = 0
-  for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0
-  const discountPct = 10 + Math.abs(hash % 31)
-  const originalPrice = Number((price / (1 - discountPct / 100)).toFixed(2))
-  return { originalPrice, discount: discountPct, savings: Number((originalPrice - price).toFixed(2)) }
+/**
+ * Category → stable placeholder photo key, used only for products without
+ * their own image, so a card never renders an unrelated random photo.
+ */
+const categoryImageKeys: Record<string, string> = {
+  'Baju Wanita': 'fashion-wanita',
+  'Baju Pria': 'fashion-pria',
+  'Baju Anak': 'fashion-anak',
+  Aksesoris: 'aksesoris',
+  'Sweater & Jacket': 'sweater',
+  'Sepatu Pria': 'sepatu-pria',
+  'Sepatu Wanita': 'sepatu-wanita',
+  'Sepatu Anak': 'sepatu-anak',
 }
 
-const categoryImages: Record<string, string> = {
-  Electronics: 'https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?w=400&h=400&fit=crop',
-  Furniture: 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=400&h=400&fit=crop',
-  Sports: 'https://images.unsplash.com/photo-1517649763962-0c623066013b?w=400&h=400&fit=crop',
-  Accessories: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=400&h=400&fit=crop',
-  Home: 'https://images.unsplash.com/photo-1556911220-bff31c812dba?w=400&h=400&fit=crop',
-  Appliances: 'https://images.unsplash.com/photo-1556911220-bff31c812dba?w=400&h=400&fit=crop',
-}
-
-const keywordImages: Array<[RegExp, string]> = [
-  [/phone|galaxy|iphone|smartphone|mobile|redmi|pixel/i, 'https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?w=400&h=400&fit=crop'],
-  [/watch|band|wearable|smartwatch/i, 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=400&h=400&fit=crop'],
-  [/speaker|headphone|earbud|audio|sound|boAt|buds/i, 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400&h=400&fit=crop'],
-  [/laptop|macbook|notebook|computer/i, 'https://images.unsplash.com/photo-1496181133206-80ce9b88a853?w=400&h=400&fit=crop'],
-  [/chair|desk|table|sofa|furniture|shelf/i, 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=400&h=400&fit=crop'],
-  [/backpack|bag|luggage|wallet/i, 'https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=400&h=400&fit=crop'],
-  [/bottle/i, 'https://images.unsplash.com/photo-1602143407151-7111542de6e8?w=400&h=400&fit=crop'],
-  [/tv|television|monitor|camera/i, 'https://images.unsplash.com/photo-1593359677879-a4bb92f829d1?w=400&h=400&fit=crop'],
-]
-
+/**
+ * Products created through the admin dashboard may have no image attached yet.
+ * The seeded catalog stores its own photo per variant, so this fallback only
+ * has to keep the grid from rendering an empty area. The seed is stable per
+ * product, so the same product keeps the same placeholder across reloads.
+ */
 function resolveImage(product: Product) {
-  for (const [re, url] of keywordImages) {
-    if (re.test(product.name)) return url
-  }
-  return categoryImages[product.category] || 'https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?w=400&h=400&fit=crop'
+  const own = product.images?.find((image) => image?.url)?.url
+  if (own) return own
+
+  const key = categoryImageKeys[product.category] ?? 'fashion'
+  return `https://picsum.photos/seed/${key}-${product.id.slice(-6)}/800/1000`
 }
 
 export function ProductCard({ product, featured = false }: ProductCardProps) {
-  const { originalPrice, discount, savings } = getDiscount(product.name, product.price)
-
-  const imageUrl = resolveImage(product)
+  const available = product.available ?? product.stock
+  const soldOut = available <= 0
 
   return (
     <Link
       href={`/products/${product.id}`}
-      className={`block h-full rounded-lg bg-white overflow-hidden transition-all duration-300 group ${
+      className={`group flex h-full flex-col overflow-hidden rounded-lg bg-white transition-all duration-300 ${
         featured
           ? 'border-2 border-blue-500 shadow-[0_4px_20px_rgba(59,130,246,0.25)]'
-          : 'border border-gray-200 hover:shadow-md hover:border-blue-300'
+          : 'border border-gray-200 hover:border-blue-300 hover:shadow-md'
       }`}
     >
-      <div className="relative bg-[#f4f5f7] h-40 sm:h-44 overflow-hidden">
+      <div className="relative aspect-[4/5] w-full overflow-hidden bg-[#f4f5f7]">
+        {/* Catalog images are arbitrary aspect ratios, so cover-crop instead of
+            letterboxing them inside a padded box. */}
         <img
-          src={imageUrl}
+          src={resolveImage(product)}
           alt={product.name}
-          className="w-full h-full object-contain p-4 group-hover:scale-105 transition-transform duration-500"
+          loading="lazy"
+          className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
         />
-        <span className="absolute top-0 right-0 bg-blue-500 text-white text-[11px] font-bold leading-tight text-center px-2.5 py-2 rounded-bl-2xl rounded-tr-lg">
-          56%
-          <br />
-          OFF
-        </span>
+        {soldOut && (
+          <span className="absolute inset-x-0 bottom-0 bg-gray-900/80 py-1 text-center text-[11px] font-semibold text-white">
+            Stok habis
+          </span>
+        )}
       </div>
 
-      <div className="p-3">
-        <h3 className="text-[13px] font-semibold text-gray-900 leading-snug line-clamp-2 min-h-[36px]">
+      <div className="flex flex-1 flex-col p-2.5 sm:p-3">
+        <h3 className="line-clamp-2 min-h-[34px] text-xs font-semibold leading-snug text-gray-900 sm:text-[13px]">
           {product.name}
         </h3>
-        <div className="flex items-baseline gap-2 mt-1">
-          <span className="text-sm font-bold text-gray-900">₹{Math.round(product.price).toLocaleString('en-IN')}</span>
-          <span className="text-xs line-through text-gray-400">₹{Math.round(originalPrice).toLocaleString('en-IN')}</span>
-        </div>
-        <div className="border-t border-gray-100 mt-2.5 pt-2 text-xs font-semibold text-green-600">
-          Save - ₹{Math.round(savings).toLocaleString('en-IN')}
-        </div>
+
+        <p className="mt-1 text-sm font-bold text-gray-900">{formatRupiah(product.price)}</p>
+
+        <p className="mt-auto pt-2 text-[11px] text-gray-500">
+          {product.category}
+          {!soldOut && available <= 5 && (
+            <span className="text-red-600"> · sisa {available}</span>
+          )}
+        </p>
       </div>
     </Link>
   )

@@ -1,101 +1,171 @@
-import React from 'react'
+'use client'
 
-export interface CartItem {
-  productId: string
-  productName: string
+import { useEffect, useState } from 'react'
+import apiClient from './api-client'
+
+export interface CartProduct {
+  id: string
+  name: string
   price: number
-  quantity: number
   stock: number
-  category: string
+  images: { url: string; alt: string | null }[]
 }
 
-export class CartService {
-  private readonly CART_SESSION_KEY = 'ecommerce_cart'
+export interface CartLine {
+  id: string
+  productId: string
+  quantity: number
+  unitPrice: number
+  lineTotal: number
+  stock: number
+  product: CartProduct | null
+}
 
-  getCart(): CartItem[] {
-    const cartJson = typeof window !== 'undefined' ? window.sessionStorage.getItem(this.CART_SESSION_KEY) : null
-    if (!cartJson) return []
-    try {
-      return JSON.parse(cartJson)
-    } catch {
-      return []
+export interface CartState {
+  items: CartLine[]
+  subtotal: number
+  totalItems: number
+  loading: boolean
+  ready: boolean
+  error: string | null
+}
+
+const EMPTY: CartState = {
+  items: [],
+  subtotal: 0,
+  totalItems: 0,
+  loading: false,
+  ready: false,
+  error: null,
+}
+
+let state: CartState = EMPTY
+const listeners = new Set<() => void>()
+
+function setState(patch: Partial<CartState>) {
+  state = { ...state, ...patch }
+  listeners.forEach((listener) => listener())
+}
+
+function errorMessage(error: any, fallback: string) {
+  const message = error?.response?.data?.message
+  if (Array.isArray(message)) return message.join(', ')
+  return typeof message === 'string' ? message : fallback
+}
+
+function isSignedIn() {
+  return typeof window !== 'undefined' && Boolean(window.localStorage.getItem('token'))
+}
+
+export const cartStore = {
+  get: () => state,
+  subscribe(listener: () => void) {
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
     }
-  }
+  },
+  /** Drops local cart state (used on sign-out). */
+  reset() {
+    setState({ ...EMPTY, ready: true })
+  },
+}
 
-  addToCart(product: { id: string; name: string; price: number; stock: number; category: string }, quantity: number = 1) {
-    if (quantity < 1) throw new Error('Quantity must be at least 1')
-    if (quantity > product.stock) throw new Error('Quantity exceeds stock')
-    const cart = this.getCart()
-    const existingIndex = cart.findIndex((item) => item.productId === product.id)
-    if (existingIndex >= 0) {
-      const newQuantity = cart[existingIndex].quantity + quantity
-      if (newQuantity > product.stock) throw new Error('Quantity exceeds stock')
-      cart[existingIndex].quantity = newQuantity
-    } else {
-      cart.push({
-        productId: product.id,
-        productName: product.name,
-        price: product.price,
-        quantity,
-        stock: product.stock,
-        category: product.category,
-      })
+/** Loads the server cart; a no-op for guests (server carts need a session). */
+export async function refreshCart() {
+  if (!isSignedIn()) {
+    cartStore.reset()
+    return
+  }
+  setState({ loading: true })
+  try {
+    const res = await apiClient.get('/cart')
+    setState({
+      items: res.data.cart ?? [],
+      subtotal: res.data.subtotal ?? 0,
+      totalItems: res.data.totalItems ?? 0,
+      error: null,
+    })
+  } catch (error: any) {
+    if (error?.response?.status === 401) {
+      cartStore.reset()
+      return
     }
-    this.saveCart(cart)
-    return cart
-  }
-
-  updateQuantity(productId: string, quantity: number) {
-    if (quantity < 0) throw new Error('Quantity cannot be negative')
-    if (quantity === 0) return this.removeFromCart(productId)
-    const cart = this.getCart()
-    const index = cart.findIndex((item) => item.productId === productId)
-    if (index === -1) throw new Error('Item not in cart')
-    if (quantity > cart[index].stock) throw new Error('Quantity exceeds stock')
-    cart[index].quantity = quantity
-    this.saveCart(cart)
-    return cart
-  }
-
-  removeFromCart(productId: string) {
-    const cart = this.getCart()
-    const filtered = cart.filter((item) => item.productId !== productId)
-    this.saveCart(filtered)
-    return filtered
-  }
-
-  clearCart() {
-    if (typeof window !== 'undefined') window.sessionStorage.removeItem(this.CART_SESSION_KEY)
-  }
-
-  getCartSummary() {
-    const cart = this.getCart()
-    const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0)
-    const totalPrice = cart.reduce((sum, item) => sum + item.price * item.quantity, 0)
-    return { totalItems, totalPrice, items: cart }
-  }
-
-  private saveCart(cart: CartItem[]) {
-    if (typeof window !== 'undefined') {
-      window.sessionStorage.setItem(this.CART_SESSION_KEY, JSON.stringify(cart))
-    }
+    setState({ error: errorMessage(error, 'Could not load your cart') })
+  } finally {
+    setState({ loading: false, ready: true })
   }
 }
 
-export const cartService = new CartService()
+export async function addToCart(productId: string, quantity = 1) {
+  setState({ error: null })
+  try {
+    await apiClient.post('/cart/items', { productId, quantity })
+    await refreshCart()
+    return { ok: true as const }
+  } catch (error: any) {
+    const message = errorMessage(error, 'Could not add to cart')
+    setState({ error: message })
+    return { ok: false as const, error: message }
+  }
+}
 
-// React hook wrapper for components
+export async function updateQuantity(productId: string, quantity: number) {
+  setState({ error: null })
+  try {
+    await apiClient.put(`/cart/items/${productId}`, { quantity })
+    await refreshCart()
+    return { ok: true as const }
+  } catch (error: any) {
+    const message = errorMessage(error, 'Could not update the cart')
+    setState({ error: message })
+    return { ok: false as const, error: message }
+  }
+}
+
+export async function removeItem(productId: string) {
+  setState({ error: null })
+  try {
+    await apiClient.delete(`/cart/items/${productId}`)
+    await refreshCart()
+    return { ok: true as const }
+  } catch (error: any) {
+    const message = errorMessage(error, 'Could not remove the item')
+    setState({ error: message })
+    return { ok: false as const, error: message }
+  }
+}
+
+export async function clearCart() {
+  setState({ error: null })
+  try {
+    await apiClient.post('/cart/clear')
+  } finally {
+    await refreshCart()
+  }
+}
+
+/** Clears local cart state after sign-out. */
+export function resetCart() {
+  cartStore.reset()
+}
+
 export function useCart() {
-  const [items, setItems] = React.useState<CartItem[]>([])
-  
-  React.useEffect(() => {
-    setItems(cartService.getCart())
+  const [snapshot, setSnapshot] = useState<CartState>(() => cartStore.get())
+
+  useEffect(() => {
+    const unsubscribe = cartStore.subscribe(() => setSnapshot(cartStore.get()))
+    if (!cartStore.get().ready) void refreshCart()
+    return unsubscribe
   }, [])
-  
-  const addToCart = (item: { id: string; name: string; price: number; quantity: number }) => {
-    cartService.addToCart({ id: item.id, name: item.name, price: item.price, stock: 999, category: '' }, item.quantity)
-    setItems(cartService.getCart())
+
+  return {
+    ...snapshot,
+    refresh: refreshCart,
+    addToCart,
+    addItem: addToCart,
+    updateQuantity,
+    removeItem,
+    clearCart,
   }
-  
-  return { items, addToCart }
 }

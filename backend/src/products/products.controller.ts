@@ -33,6 +33,20 @@ export class ProductsController {
     return this.productsService.getCategories()
   }
 
+  // Declared before ':id' so "brands" is not swallowed as a product id.
+  @Get('brands')
+  async getBrands() {
+    return this.productsService.getBrands()
+  }
+
+  // Declared before ':id' so "best-sellers" is not swallowed as a product id.
+  @Get('best-sellers')
+  async getBestSellers(@Query('limit') limit?: string) {
+    const parsed = Number(limit)
+    const safe = Number.isFinite(parsed) ? Math.min(20, Math.max(1, parsed)) : 8
+    return this.productsService.getBestSellers(safe)
+  }
+
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.productsService.findOne(id)

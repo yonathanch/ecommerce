@@ -1,0 +1,698 @@
+'use client'
+
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  ExternalLink,
+  LayoutGrid,
+  MoreVertical,
+  Package,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+} from 'lucide-react'
+import apiClient from '@/lib/api-client'
+import { formatRupiah } from '@/lib/format'
+import { Panel, StatusPill } from '@/components/admin/ui'
+
+interface AdminVariant {
+  sku: string
+  options: Record<string, string> | null
+  price: number | null
+  stock: number
+  weight: number | null
+  imageUrl: string | null
+}
+
+interface AdminProduct {
+  id: string
+  name: string
+  description: string | null
+  price: number
+  stock: number
+  reserved: number
+  available: number
+  category: string
+  brand: { id: string; name: string; slug: string } | null
+  images?: Array<{ url: string }>
+  variants: AdminVariant[]
+}
+
+/** One row in the variant editor. Strings, because it is driven by inputs. */
+interface VariantRow {
+  sku: string
+  /** "Warna: Hitam, Ukuran: 42" — the axes the product detail page renders. */
+  options: string
+  price: string
+  stock: string
+  weight: string
+  imageUrl: string
+  /**
+   * New SKUs accept an opening stock. Existing ones do not: their stock only
+   * moves through the Inventori screen so it always leaves a ledger row.
+   */
+  isNew: boolean
+}
+
+interface FormState {
+  name: string
+  category: string
+  brand: string
+  price: string
+  stock: string
+  description: string
+  imageUrl: string
+  variants: VariantRow[]
+}
+
+const EMPTY_FORM: FormState = {
+  name: '',
+  category: '',
+  brand: '',
+  price: '',
+  stock: '',
+  description: '',
+  imageUrl: '',
+  variants: [],
+}
+
+const EMPTY_VARIANT: VariantRow = {
+  sku: '',
+  options: '',
+  price: '',
+  stock: '',
+  weight: '',
+  imageUrl: '',
+  isNew: true,
+}
+
+const errorMessage = (e: any, fallback: string) => {
+  const message = e?.response?.data?.message
+  return Array.isArray(message) ? message.join(', ') : message ?? fallback
+}
+
+/** "Warna: Hitam, Ukuran: 42" -> { Warna: 'Hitam', Ukuran: '42' }. */
+function parseOptions(raw: string): Record<string, string> | undefined {
+  const options: Record<string, string> = {}
+  for (const entry of raw.split(',')) {
+    const [key, ...rest] = entry.split(':')
+    const name = key.trim()
+    const value = rest.join(':').trim()
+    if (name && value) options[name] = value
+  }
+  return Object.keys(options).length > 0 ? options : undefined
+}
+
+/** Stored options back into the single editable line. */
+function formatOptions(options: Record<string, string> | null): string {
+  return Object.entries(options ?? {})
+    .map(([name, value]) => `${name}: ${value}`)
+    .join(', ')
+}
+
+const optionalNumber = (value: string) => (value.trim() === '' ? undefined : Number(value))
+
+/** Storefront-style availability badge, mirroring the template's status pills. */
+function stockStatus(product: AdminProduct): { label: string; tone: 'green' | 'amber' | 'rose' } {
+  if (product.stock <= 0) return { label: 'Habis', tone: 'rose' }
+  if (product.stock <= 5) return { label: 'Stok menipis', tone: 'amber' }
+  return { label: 'Tersedia', tone: 'green' }
+}
+
+export default function AdminProductsPage() {
+  const [products, setProducts] = useState<AdminProduct[]>([])
+  const [categories, setCategories] = useState<string[]>([])
+  const [brands, setBrands] = useState<Array<{ id: string; name: string; slug: string }>>([])
+  const [form, setForm] = useState<FormState>(EMPTY_FORM)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [formOpen, setFormOpen] = useState(false)
+  const [openMenu, setOpenMenu] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(8)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [list, categoryList, brandList] = await Promise.all([
+        apiClient.get('/products?limit=100'),
+        apiClient.get('/products/categories'),
+        // Brands are owned by the catalog (seeded, rendered at /brands/<slug>),
+        // so the form picks from this closed list instead of inventing a label.
+        apiClient.get('/products/brands'),
+      ])
+      setProducts(list.data.items)
+      setCategories(categoryList.data)
+      setBrands(brandList.data)
+      setError('')
+    } catch (e: any) {
+      setError(errorMessage(e, 'Gagal memuat produk'))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  // "Tambah Produk" in the sidebar links to /admin/products?new=1, so opening
+  // the create form stays a plain link instead of a separate route.
+  useEffect(() => {
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('new')) {
+      setFormOpen(true)
+    }
+  }, [])
+
+  const reset = () => {
+    setForm(EMPTY_FORM)
+    setEditingId(null)
+  }
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setError('')
+    setNotice('')
+
+    const blankSku = form.variants.find((row) => row.sku.trim() === '')
+    if (blankSku) {
+      setError('Setiap varian butuh SKU.')
+      return
+    }
+
+    setBusy(true)
+
+    const variants = form.variants.map((row) => {
+      const entry: Record<string, unknown> = { sku: row.sku.trim() }
+      const options = parseOptions(row.options)
+      if (options) entry.options = options
+      const price = optionalNumber(row.price)
+      if (price !== undefined) entry.price = price
+      const weight = optionalNumber(row.weight)
+      if (weight !== undefined) entry.weight = weight
+      if (row.imageUrl.trim()) entry.imageUrl = row.imageUrl.trim()
+      // Existing SKUs are sent without stock on purpose: only a brand-new SKU
+      // gets an opening balance here, everything else goes through the ledger.
+      if (row.isNew) {
+        const stock = optionalNumber(row.stock)
+        if (stock !== undefined) entry.stock = stock
+      }
+      return entry
+    })
+
+    const payload: Record<string, unknown> = {
+      name: form.name.trim(),
+      category: form.category.trim(),
+      brand: form.brand || null,
+      price: Number(form.price),
+      // The gallery field is the whole gallery: empty means "no image".
+      imageUrls: form.imageUrl.trim() ? [form.imageUrl.trim()] : [],
+      variants,
+      ...(form.stock === '' ? {} : { stock: Number(form.stock) }),
+      ...(form.description.trim() ? { description: form.description.trim() } : {}),
+    }
+
+    try {
+      if (editingId) {
+        await apiClient.put(`/products/${editingId}`, payload)
+        setNotice(`Produk "${payload.name}" diperbarui.`)
+      } else {
+        await apiClient.post('/products', payload)
+        setNotice(`Produk "${payload.name}" ditambahkan ke katalog.`)
+      }
+      reset()
+      setFormOpen(false)
+      await load()
+    } catch (e: any) {
+      setError(errorMessage(e, 'Gagal menyimpan produk'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const startEdit = (product: AdminProduct) => {
+    setEditingId(product.id)
+    setNotice('')
+    setFormOpen(true)
+    setOpenMenu(null)
+    setForm({
+      name: product.name,
+      category: product.category,
+      brand: product.brand?.slug ?? '',
+      price: String(product.price),
+      stock: String(product.stock),
+      description: product.description ?? '',
+      imageUrl: product.images?.[0]?.url ?? '',
+      variants: (product.variants ?? []).map((variant) => ({
+        sku: variant.sku,
+        options: formatOptions(variant.options),
+        price: variant.price !== null && variant.price !== undefined ? String(variant.price) : '',
+        stock: String(variant.stock),
+        weight: variant.weight !== null && variant.weight !== undefined ? String(variant.weight) : '',
+        imageUrl: variant.imageUrl ?? '',
+        isNew: false,
+      })),
+    })
+  }
+
+  const updateVariant = (index: number, patch: Partial<VariantRow>) => {
+    setForm((current) => ({
+      ...current,
+      variants: current.variants.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+    }))
+  }
+
+  const remove = async (product: AdminProduct) => {
+    setOpenMenu(null)
+    if (!window.confirm(`Hapus "${product.name}" dari katalog? Tindakan ini permanen.`)) return
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      await apiClient.delete(`/products/${product.id}`)
+      if (editingId === product.id) {
+        reset()
+        setFormOpen(false)
+      }
+      setNotice(`Produk "${product.name}" dihapus.`)
+      await load()
+    } catch (e: any) {
+      setError(errorMessage(e, 'Gagal menghapus produk'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase()
+    if (!term) return products
+    return products.filter(
+      (p) =>
+        p.name.toLowerCase().includes(term) ||
+        p.category.toLowerCase().includes(term) ||
+        p.id.toLowerCase().includes(term),
+    )
+  }, [products, search])
+
+  const stats = useMemo(() => {
+    const total = products.length
+    const inStock = products.filter((p) => p.stock > 5).length
+    const lowStock = products.filter((p) => p.stock > 0 && p.stock <= 5).length
+    const outOfStock = products.filter((p) => p.stock <= 0).length
+    return { total, inStock, lowStock, outOfStock }
+  }, [products])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const rows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize)
+
+  const tiles = [
+    { label: 'Total produk', value: stats.total },
+    { label: 'Stok aman', value: stats.inStock },
+    { label: 'Stok menipis', value: stats.lowStock },
+    { label: 'Produk habis', value: stats.outOfStock },
+  ]
+
+  return (
+    <div className="space-y-6">
+      {/* ------------------------------------------------------------ header */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">Produk</h1>
+          <p className="text-sm text-neutral-500">Kelola katalog produk Anda.</p>
+        </div>
+        <div className="flex items-center gap-2 [&_a]:h-9 [&_button]:h-9">
+          <Link
+            href="/products"
+            className="flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 text-sm font-medium text-neutral-900 transition hover:bg-neutral-100"
+          >
+            <LayoutGrid className="size-4" />
+            Storefront
+          </Link>
+          <button
+            type="button"
+            onClick={() => {
+              reset()
+              setFormOpen((open) => (editingId ? true : !open))
+              setNotice('')
+            }}
+            className="flex items-center gap-1.5 rounded-lg bg-neutral-900 px-2.5 text-sm font-medium text-white transition hover:bg-neutral-900/80"
+          >
+            <Plus className="size-4" />
+            Tambah produk
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <p className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{error}</p>
+      )}
+      {notice && (
+        <p className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+          {notice}
+        </p>
+      )}
+
+      {/* ------------------------------------------------------------ tiles */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {tiles.map((tile) => (
+          <div key={tile.label} className="rounded-xl bg-white py-4 ring-1 ring-neutral-900/10">
+            <div className="space-y-2 px-4">
+              <p className="text-sm font-medium text-neutral-500">{tile.label}</p>
+              <p className="text-3xl font-semibold tracking-tight tabular-nums text-neutral-900">
+                {tile.value}
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* ------------------------------------------------------------- form */}
+      {formOpen && (
+        <form onSubmit={submit} className="rounded-xl bg-white px-4 py-4 ring-1 ring-neutral-900/10">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-base leading-snug font-medium text-neutral-900">
+              {editingId ? 'Ubah produk' : 'Tambah produk'}
+            </h2>
+            <button
+              type="button"
+              onClick={() => {
+                reset()
+                setFormOpen(false)
+              }}
+              className="text-sm text-neutral-500 hover:text-neutral-800"
+            >
+              Tutup
+            </button>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="text-sm">
+              <span className="block text-sm font-medium text-neutral-500">Nama</span>
+              <input
+                required
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                className="mt-1 w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none transition focus:border-neutral-400 focus:ring-2 focus:ring-neutral-400/40"
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block text-sm font-medium text-neutral-500">Kategori</span>
+              {/*
+                A closed list, not a free-text datalist: the API only accepts a
+                category that already exists, because this list is what the
+                storefront renders as navigation chips.
+              */}
+              <select
+                required
+                value={form.category}
+                onChange={(e) => setForm({ ...form, category: e.target.value })}
+                className="mt-1 w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-neutral-400 focus:ring-2 focus:ring-neutral-400/40"
+              >
+                <option value="">Pilih kategori…</option>
+                {categories.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1 block text-xs text-neutral-500">
+                Kategori dikelola di menu{' '}
+                <Link href="/admin/categories" className="underline underline-offset-2 hover:text-neutral-900">
+                  Kategori
+                </Link>
+                .
+              </span>
+            </label>
+            <label className="text-sm">
+              <span className="block text-sm font-medium text-neutral-500">Brand (opsional)</span>
+              {/*
+                Closed list for the same reason as categories: the API rejects an
+                unknown label, and this list is what the storefront renders as
+                brand cards and /brands/<slug> pages.
+              */}
+              <select
+                value={form.brand}
+                onChange={(e) => setForm({ ...form, brand: e.target.value })}
+                className="mt-1 w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-neutral-400 focus:ring-2 focus:ring-neutral-400/40"
+              >
+                <option value="">Tanpa brand</option>
+                {brands.map((brand) => (
+                  <option key={brand.id} value={brand.slug}>
+                    {brand.name}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1 block text-xs text-neutral-500">
+                Tampil di bagian Top Fashion Brands dan halaman{' '}
+                <span className="font-mono">/brands/&lt;slug&gt;</span>.
+              </span>
+            </label>
+            <label className="text-sm">
+              <span className="block text-sm font-medium text-neutral-500">Harga</span>
+              <input
+                required
+                type="number"
+                min={0}
+                step="0.01"
+                value={form.price}
+                onChange={(e) => setForm({ ...form, price: e.target.value })}
+                className="mt-1 w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none transition focus:border-neutral-400 focus:ring-2 focus:ring-neutral-400/40"
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block text-sm font-medium text-neutral-500">Stok</span>
+              <input
+                type="number"
+                min={0}
+                value={form.stock}
+                onChange={(e) => setForm({ ...form, stock: e.target.value })}
+                className="mt-1 w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none transition focus:border-neutral-400 focus:ring-2 focus:ring-neutral-400/40"
+              />
+            </label>
+            <label className="text-sm md:col-span-2">
+              <span className="block text-sm font-medium text-neutral-500">
+                URL gambar (opsional)
+              </span>
+              {/* The field is the whole gallery: filling it replaces the stored
+                  image, emptying it removes the image. */}
+              <input
+                type="url"
+                value={form.imageUrl}
+                onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
+                placeholder="https://…"
+                className="mt-1 w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none transition focus:border-neutral-400 focus:ring-2 focus:ring-neutral-400/40"
+              />
+            </label>
+            <label className="text-sm md:col-span-3">
+              <span className="block text-sm font-medium text-neutral-500">Deskripsi</span>
+              <textarea
+                rows={2}
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                className="mt-1 w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none transition focus:border-neutral-400 focus:ring-2 focus:ring-neutral-400/40"
+              />
+            </label>
+
+            {/* ------------------------------------------------ variant editor */}
+            <div className="rounded-lg border border-neutral-200 p-3 md:col-span-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-medium text-neutral-900">Varian</h3>
+                  <p className="mt-0.5 text-xs text-neutral-500">
+                    Satu baris per SKU. Opsi ditulis{' '}
+                    <span className="font-mono">Nama: Nilai</span> dipisah koma, mis.{' '}
+                    <span className="font-mono">Warna: Hitam, Ukuran: 42</span> — inilah pilihan yang
+                    tampil di halaman produk.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setForm((current) => ({
+                      ...current,
+                      variants: [...current.variants, { ...EMPTY_VARIANT }],
+                    }))
+                  }
+                  className="flex h-9 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 text-sm font-medium text-neutral-900 transition hover:bg-neutral-100"
+                >
+                  <Plus className="size-4" />
+                  Tambah varian
+                </button>
+              </div>
+
+              {form.variants.length === 0 ? (
+                <p className="mt-3 text-xs text-neutral-500">
+                  Belum ada varian. Produk tanpa varian tetap bisa dijual.
+                </p>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  {form.variants.map((row, index) => (
+                    <div
+                      key={index}
+                      className="grid gap-2 rounded-lg bg-neutral-50 p-2 md:grid-cols-12"
+                    >
+                      <label className="text-xs md:col-span-3">
+                        <span className="block text-neutral-500">SKU</span>
+                        <input
+                          required
+                          value={row.sku}
+                          onChange={(e) => updateVariant(index, { sku: e.target.value })}
+                          className="mt-1 w-full rounded-lg border border-neutral-200 px-2 py-1.5 font-mono text-xs outline-none focus:border-neutral-400"
+                        />
+                      </label>
+                      <label className="text-xs md:col-span-5">
+                        <span className="block text-neutral-500">Opsi</span>
+                        <input
+                          value={row.options}
+                          onChange={(e) => updateVariant(index, { options: e.target.value })}
+                          placeholder="Warna: Hitam, Ukuran: 42"
+                          className="mt-1 w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-xs outline-none focus:border-neutral-400"
+                        />
+                      </label>
+                      <label className="text-xs md:col-span-4">
+                        <span className="block text-neutral-500">Harga (opsional)</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={row.price}
+                          onChange={(e) => updateVariant(index, { price: e.target.value })}
+                          placeholder="ikut harga produk"
+                          className="mt-1 w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-xs outline-none focus:border-neutral-400"
+                        />
+                      </label>
+                      <label className="text-xs md:col-span-3">
+                        <span className="block text-neutral-500">Stok</span>
+                        <input
+                          type="number"
+                          min={0}
+                          /* Existing SKUs keep the stock they have: stock only
+                             moves through the Inventori ledger, with a reason. */
+                          disabled={!row.isNew}
+                          value={row.stock}
+                          onChange={(e) => updateVariant(index, { stock: e.target.value })}
+                          className="mt-1 w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-xs outline-none focus:border-neutral-400 disabled:bg-neutral-100 disabled:text-neutral-500"
+                        />
+                      </label>
+                      <label className="text-xs md:col-span-3">
+                        <span className="block text-neutral-500">Berat (opsional)</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={row.weight}
+                          onChange={(e) => updateVariant(index, { weight: e.target.value })}
+                          className="mt-1 w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-xs outline-none focus:border-neutral-400"
+                        />
+                      </label>
+                      <label className="text-xs md:col-span-4">
+                        <span className="block text-neutral-500">URL gambar (opsional)</span>
+                        <input
+                          value={row.imageUrl}
+                          onChange={(e) => updateVariant(index, { imageUrl: e.target.value })}
+                          className="mt-1 w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-xs outline-none focus:border-neutral-400"
+                        />
+                      </label>
+                      <div className="flex items-end md:col-span-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setForm((current) => ({
+                              ...current,
+                              variants: current.variants.filter((_, i) => i !== index),
+                            }))
+                          }
+                          className="flex h-8 w-full items-center justify-center gap-1 rounded-lg border border-rose-200 text-xs font-medium text-rose-600 transition hover:bg-rose-50"
+                        >
+                          <Trash2 className="size-3.5" />
+                          Hapus
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <p className="mt-2 text-xs text-neutral-500">
+                Stok SKU baru adalah saldo awalnya. Stok SKU yang sudah ada hanya berubah lewat{' '}
+                <Link
+                  href="/admin/inventory"
+                  className="underline underline-offset-2 hover:text-neutral-900"
+                >
+                  Inventori
+                </Link>{' '}
+                supaya setiap pergerakan punya alasan di ledger.
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 flex gap-2">
+            <button
+              type="submit"
+              disabled={busy}
+              className="h-9 rounded-lg neutral-900 px-3 text-sm font-medium text-white transition hover:neutral-900/80 disabled:opacity-50"
+            >
+              {editingId ? 'Simpan perubahan' : 'Tambah produk'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                reset()
+                setFormOpen(false)
+              }}
+              className="h-9 rounded-lg border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-900 transition hover:bg-neutral-100"
+            >
+              Batal
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* ------------------------------------------------------------ table */}
+      <Panel title="Semua produk" subtitle={`${filtered.length} produk`} bodyClassName="px-4 pb-0">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="relative w-full max-w-xs">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value)
+                setPage(1)
+              }}
+              placeholder="Cari produk…"
+              className="h-9 w-full rounded-lg border border-neutral-200 pl-9 pr-3 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:ring-2 focus:ring-neutral-400/40"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="h-9 rounded-lg border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-900 transition hover:bg-neutral-100"
+          >
+            Muat ulang
+          </button>
+        </div>
+
+        <div className="mt-4 overflow-hidden rounded-lg border border-neutral-200">
+          <table className="w-full min-w-[860px] text-sm">
+            <thead>
+              <tr className="border-b bg-neutral-100/40 text-left text-sm font-medium text-neutral-500">
+                <th className="h-10 px-4 font-medium">Produk</th>
+                <th className="h-10 px-4 font-medium">Kategori</th>
+                <th className="h-10 px-4 text-right font-medium">Harga</th>
+                <th className="h-10 px-4 text-right font-medium">Stok</th>
+                <th className="h-10 px-4 text-right font-medium">Tersedia</th>
+                <th className="h-10 px-4 text-right font-medium">Status</th>
+                <th className="h-10 px-4" />
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-8 text-center text-n

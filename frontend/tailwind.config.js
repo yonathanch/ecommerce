@@ -22,7 +22,14 @@ module.exports = {
         popover: { DEFAULT: "hsl(var(--popover))", foreground: "hsl(var(--popover-foreground))" },
         card: { DEFAULT: "hsl(var(--card))", foreground: "hsl(var(--card-foreground))" },
       },
-      borderRadius: { lg: "var(--radius)", md: "calc(var(--radius) - 2px)", sm: "calc(var(--radius) - 4px)" },
+      borderRadius: {
+        lg: "var(--radius)",
+        md: "calc(var(--radius) - 2px)",
+        sm: "calc(var(--radius) - 4px)",
+        // Lets .admin-theme override card rounding to match the OrbynAdmin
+        // template (radius-xl = --radius * 1.4); other scopes keep 0.75rem.
+        xl: "var(--radius-xl, 0.75rem)",
+      },
     },
   },
   plugins: [require("tailwindcss-animate")],

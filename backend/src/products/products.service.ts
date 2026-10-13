@@ -1,25 +1,20 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
+import { InventoryService } from '../inventory/inventory.service'
+import { slugify } from '../common/slug'
 import {
   CreateProductDto,
   UpdateProductDto,
   ListProductsQueryDto,
+  VariantInputDto,
 } from './dto/product.dto'
 
 export type { CreateProductDto, UpdateProductDto }
 
-/** Lowercase, dash-separated, unique-ish slug from a category name. */
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
-
 const PRODUCT_INCLUDE = {
   category: { select: { id: true, name: true, slug: true } },
+  brand: { select: { id: true, name: true, slug: true } },
   images: { orderBy: { position: 'asc' as const } },
   variants: true,
 } satisfies Prisma.ProductInclude
@@ -28,24 +23,70 @@ type ProductWithDetails = Prisma.ProductGetPayload<{ include: typeof PRODUCT_INC
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly inventory: InventoryService,
+  ) {}
 
   /**
-   * Find or create a category by name. Categories are user-facing strings,
-   * so product creation must not fail when a new category appears.
+   * Resolve an existing category by name or slug, matched through the slug so
+   * "sepatu pria" and "Sepatu Pria" land on the same row instead of creating a
+   * near-duplicate.
+   *
+   * An unknown name is rejected rather than created on the fly: categories are
+   * the chips the storefront renders, so implicitly creating one let a typo in
+   * the product form appear in the storefront navigation. Categories are owned
+   * by the back-office (see AdminService.createCategory).
    */
   private async resolveCategory(name: string) {
     const slug = slugify(name)
     const existing = await this.prisma.category.findFirst({
       where: { OR: [{ name }, { slug }] },
     })
-    if (existing) return existing
-    return this.prisma.category.create({ data: { name, slug } })
+    if (!existing) {
+      throw new BadRequestException(
+        `Unknown category "${name}". Create it in the Kategori menu first.`,
+      )
+    }
+    return existing
   }
 
-  /** Flatten relation shape to the plain `category: string` the frontend expects. */
-  private present(product: ProductWithDetails) {
-    return { ...product, category: product.category.name }
+  /**
+   * Resolve an optional fashion label, matched through the slug so "VERSE" and
+   * "verse" hit the same row. Brands are the cards in "Top Fashion Brands" and
+   * the pages at /brands/<slug>, so an unknown label is rejected instead of
+   * being invented — a typo would otherwise publish an empty brand page.
+   *
+   * `undefined` means "leave the label alone", `null`/blank clears it.
+   */
+  private async resolveBrand(value?: string | null) {
+    const raw = value?.trim()
+    if (!raw) return null
+
+    const existing = await this.prisma.brand.findFirst({
+      where: { OR: [{ name: raw }, { slug: slugify(raw) }] },
+    })
+    if (!existing) {
+      throw new BadRequestException(`Unknown brand "${raw}".`)
+    }
+    return existing
+  }
+
+  /**
+   * Flatten relation shape to the plain `category: string` the frontend expects
+   * and expose the numbers the UI actually needs:
+   * - `stock` is the physical quantity on the shelf,
+   * - `reserved` is held by unpaid orders,
+   * - `available` is what a shopper may still buy.
+   */
+  private present(product: ProductWithDetails, reserved = 0) {
+    const held = Math.min(reserved, product.stock)
+    return {
+      ...product,
+      category: product.category.name,
+      reserved: held,
+      available: Math.max(product.stock - held, 0),
+    }
   }
 
   async findAll(query: ListProductsQueryDto) {
@@ -65,6 +106,9 @@ export class ProductsService {
     if (query.category) {
       where.category = { name: query.category }
     }
+    if (query.brand) {
+      where.brand = { slug: query.brand }
+    }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.product.findMany({
@@ -77,8 +121,10 @@ export class ProductsService {
       this.prisma.product.count({ where }),
     ])
 
+    const reserved = await this.inventory.reservedMap(items.map((p) => p.id))
+
     return {
-      items: items.map((p) => this.present(p)),
+      items: items.map((p) => this.present(p, reserved.get(p.id) ?? 0)),
       meta: {
         total,
         page,
@@ -94,11 +140,14 @@ export class ProductsService {
       include: PRODUCT_INCLUDE,
     })
     if (!product) throw new NotFoundException('Product not found')
-    return this.present(product)
+
+    const reserved = await this.inventory.reservedQuantity(id)
+    return this.present(product, reserved)
   }
 
   async create(dto: CreateProductDto) {
     const category = await this.resolveCategory(dto.category)
+    const brand = await this.resolveBrand(dto.brand)
 
     try {
       return await this.prisma.product
@@ -109,6 +158,7 @@ export class ProductsService {
           price: dto.price,
           stock: dto.stock ?? 0,
           categoryId: category.id,
+          brandId: brand?.id ?? null,
           images: dto.imageUrls?.length
             ? {
                 create: dto.imageUrls.map((url, position) => ({
@@ -154,26 +204,101 @@ export class ProductsService {
   }
 
   async update(id: string, dto: UpdateProductDto) {
-    const existing = await this.prisma.product.findUnique({ where: { id } })
+    const existing = await this.prisma.product.findUnique({
+      where: { id },
+      include: { variants: { select: { sku: true } } },
+    })
     if (!existing) throw new NotFoundException('Product not found')
 
     const category = dto.category
       ? await this.resolveCategory(dto.category)
       : undefined
+    const brand = dto.brand === undefined ? undefined : await this.resolveBrand(dto.brand)
 
-    return this.prisma.product
-      .update({
-        where: { id },
-        data: {
-          name: dto.name,
-          description: dto.description,
-          price: dto.price,
-          stock: dto.stock,
-          categoryId: category?.id,
-        },
-        include: PRODUCT_INCLUDE,
+    // Images and variants are replaced as a set, so they have to land together
+    // with the product row rather than leaving a half-edited catalog behind.
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        if (dto.imageUrls) {
+          await tx.productImage.deleteMany({ where: { productId: id } })
+          if (dto.imageUrls.length > 0) {
+            await tx.productImage.createMany({
+              data: dto.imageUrls.map((url, position) => ({ productId: id, url, position })),
+            })
+          }
+        }
+
+        if (dto.variants) {
+          await this.syncVariants(tx, id, existing.variants.map((v) => v.sku), dto.variants)
+        }
+
+        const updated = await tx.product.update({
+          where: { id },
+          data: {
+            name: dto.name,
+            description: dto.description,
+            price: dto.price,
+            stock: dto.stock,
+            categoryId: category?.id,
+            brandId: brand === undefined ? undefined : (brand?.id ?? null),
+          },
+          include: PRODUCT_INCLUDE,
+        })
+        return this.present(updated)
       })
-      .then((p) => this.present(p))
+    } catch (error) {
+      throw this.toKnownError(error)
+    }
+  }
+
+  /**
+   * Bring a product's variant set in line with the submitted list, matched by
+   * SKU.
+   *
+   * Stock is deliberately left untouched for SKUs that already exist: the
+   * inventory ledger is the only writer that may move stock, and it demands an
+   * admin reason (see the Inventori screen). For a brand-new SKU the submitted
+   * `stock` is simply its opening balance, same as on create.
+   *
+   * Removing a SKU deletes its row without losing history — stock movements
+   * store the SKU as text, not as a foreign key.
+   */
+  private async syncVariants(
+    tx: Prisma.TransactionClient,
+    productId: string,
+    currentSkus: string[],
+    submitted: VariantInputDto[],
+  ) {
+    const seen = new Set<string>()
+    for (const variant of submitted) {
+      const sku = variant.sku.trim()
+      if (seen.has(sku)) {
+        throw new BadRequestException(`Duplicate SKU "${sku}" in the variant list`)
+      }
+      seen.add(sku)
+    }
+
+    const removed = currentSkus.filter((sku) => !seen.has(sku))
+    if (removed.length > 0) {
+      await tx.productVariant.deleteMany({ where: { productId, sku: { in: removed } } })
+    }
+
+    for (const variant of submitted) {
+      const sku = variant.sku.trim()
+      const editable = {
+        options: (variant.options ?? {}) as Prisma.InputJsonValue,
+        price: variant.price ?? null,
+        weight: variant.weight ?? null,
+        imageUrl: variant.imageUrl ?? null,
+      }
+      if (currentSkus.includes(sku)) {
+        await tx.productVariant.update({ where: { sku }, data: editable })
+      } else {
+        await tx.productVariant.create({
+          data: { ...editable, productId, sku, stock: variant.stock ?? 0 },
+        })
+      }
+    }
   }
 
   async remove(id: string) {
@@ -188,5 +313,55 @@ export class ProductsService {
       select: { name: true },
     })
     return rows.map((r) => r.name)
+  }
+
+  /** Fashion labels with their product counts, for the Top Fashion Brands section. */
+  async getBrands() {
+    const rows = await this.prisma.brand.findMany({
+      orderBy: { name: 'asc' },
+      include: { _count: { select: { products: true } } },
+    })
+    return rows.map((b) => ({
+      id: b.id,
+      name: b.name,
+      slug: b.slug,
+      productCount: b._count.products,
+    }))
+  }
+
+  /**
+   * Best sellers: products ranked by units actually sold.
+   *
+   * Only orders that represent real revenue (PAID / SHIPPED / DELIVERED) count
+   * — unpaid, cancelled and refunded orders never move a product up this list.
+   * Products deleted since the sale are skipped instead of failing the query.
+   */
+  async getBestSellers(limit = 8) {
+    const grouped = await this.prisma.orderItem.groupBy({
+      by: ['productId'],
+      _sum: { quantity: true },
+      where: { order: { status: { in: ['PAID', 'SHIPPED', 'DELIVERED'] } } },
+      orderBy: { _sum: { quantity: 'desc' } },
+      take: limit,
+    })
+    if (grouped.length === 0) return []
+
+    const products = await this.prisma.product.findMany({
+      where: { id: { in: grouped.map((g) => g.productId) } },
+      include: PRODUCT_INCLUDE,
+    })
+    const byId = new Map(products.map((p) => [p.id, p]))
+    const reserved = await this.inventory.reservedMap(products.map((p) => p.id))
+
+    return grouped.flatMap((g) => {
+      const product = byId.get(g.productId)
+      if (!product) return []
+      return [
+        {
+          ...this.present(product, reserved.get(product.id) ?? 0),
+          sold: g._sum.quantity ?? 0,
+        },
+      ]
+    })
   }
 }

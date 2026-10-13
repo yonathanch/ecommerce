@@ -21,9 +21,9 @@
     --destructive: 0 84% 60%;
     --destructive-foreground: 210 40% 98%;
     --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 221 83% 53%;
-    --radius: 0.75rem;
+    --input: 214 32% 91%;      --ring: 221 83% 53%;
+      --radius: 0.75rem;
+      --radius-xl: 0.75rem;
   }
 
   .dark {
@@ -56,6 +56,35 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Admin shell typography — the OrbynAdmin template ships Geist, so the admin
+   opts into it explicitly. Scoped to `.admin-theme` (set on the admin root) so
+   the storefront keeps its existing font stack. */
+.admin-theme {
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* OrbynAdmin's radius scale (--radius: 0.65rem, radius-xl = 1.4x), scoped to
+     the admin shell so the storefront keeps its own rounding. */
+  --radius: 0.65rem;
+  --radius-xl: calc(0.65rem * 1.4);
+}
+
+/* Thin, unobtrusive scrollbars like the template's globals.css. */
+.admin-theme * {
+  scrollbar-width: thin;
+  scrollbar-color: #d4d4d4 transparent;
+}
+.admin-theme *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.admin-theme *::-webkit-scrollbar-thumb {
+  background-color: rgb(0 0 0 / 0.18);
+  border-radius: 9999px;
+}
+.admin-theme *::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(0 0 0 / 0.3);
 }
 
 /* MegaMart custom utilities */

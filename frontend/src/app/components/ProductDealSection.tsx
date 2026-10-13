@@ -32,7 +32,7 @@ export function ProductDealSection() {
     <section className="max-w-[1200px] mx-auto px-4 pt-10 sm:pt-14">
       <div className="relative flex items-end justify-between">
         <h2 className="relative z-10 pb-3 text-xl sm:text-2xl font-semibold text-gray-800 border-b-2 border-blue-500">
-          Grab the best deal on <span className="text-blue-500">Smartphones</span>
+          Grab the best deal on <span className="text-blue-500">Pakaian</span>
         </h2>
         <Link
           href="/products"

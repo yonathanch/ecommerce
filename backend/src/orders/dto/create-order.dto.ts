@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer'
-import { IsArray, IsInt, IsString, Min, ValidateNested } from 'class-validator'
+import { IsArray, IsInt, IsOptional, IsString, Min, ValidateNested } from 'class-validator'
 
 export class CreateOrderItemDto {
   @IsString()
@@ -8,6 +8,10 @@ export class CreateOrderItemDto {
   @IsInt()
   @Min(1)
   quantity: number
+
+  @IsOptional()
+  @IsString()
+  variantSku?: string
 }
 
 export class CreateOrderDto {

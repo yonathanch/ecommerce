@@ -75,31 +75,33 @@ function ProductListInner() {
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-1">
-          {selectedCategory || 'All Products'}
+        <h1 className="mb-1 text-2xl font-bold text-gray-900 sm:text-3xl">
+          {selectedCategory || 'Semua Produk'}
         </h1>
-        <p className="text-gray-500 text-sm">
-          {meta.total} product{meta.total === 1 ? '' : 's'} available
+        <p className="text-sm text-gray-500">
+          {meta.total} produk tersedia
         </p>
       </div>
 
-      <div className="bg-white rounded-2xl border border-gray-100 p-5 mb-8 space-y-4 shadow-sm">
+      <div className="mb-8 space-y-3 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm sm:space-y-4 sm:p-5">
         <Input
           type="text"
-          placeholder="Search products..."
+          placeholder="Cari produk…"
           value={search}
           onChange={(e) => { setSearch(e.target.value); setPage(1) }}
           className="h-11 bg-gray-50 border-gray-100 focus:border-blue-500 focus:ring-blue-500 rounded-xl"
         />
 
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Chips scroll sideways on phones instead of stacking into rows that
+            push the products off screen. */}
+        <div className="scrollbar-hide -mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-1">
           <Button
             variant={selectedCategory === '' ? 'default' : 'outline'}
             size="sm"
             onClick={() => { setSelectedCategory(''); setPage(1) }}
-            className="rounded-full text-xs font-semibold"
+            className="shrink-0 rounded-full text-xs font-semibold"
           >
-            All
+            Semua
           </Button>
           {categories.map((cat) => (
             <Button
@@ -107,7 +109,7 @@ function ProductListInner() {
               variant={selectedCategory === cat ? 'default' : 'outline'}
               size="sm"
               onClick={() => { setSelectedCategory(cat); setPage(1) }}
-              className="rounded-full text-xs font-semibold"
+              className="shrink-0 whitespace-nowrap rounded-full text-xs font-semibold"
             >
               {cat}
             </Button>
@@ -115,28 +117,28 @@ function ProductListInner() {
         </div>
 
         <div className="flex items-center gap-3 pt-1">
-          <label className="text-sm font-medium text-gray-600">Sort by</label>
+          <label className="text-sm font-medium text-gray-600">Urutkan</label>
           <select
             value={sortBy}
             onChange={(e) => { setSortBy(e.target.value as 'name' | 'price'); setPage(1) }}
             className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
           >
-            <option value="name">Name</option>
-            <option value="price">Price</option>
+            <option value="name">Nama</option>
+            <option value="price">Harga</option>
           </select>
           <select
             value={sortOrder}
             onChange={(e) => { setSortOrder(e.target.value as 'asc' | 'desc'); setPage(1) }}
             className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
           >
-            <option value="asc">Low to High</option>
-            <option value="desc">High to Low</option>
+            <option value="asc">Termurah</option>
+            <option value="desc">Termahal</option>
           </select>
         </div>
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-4">
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="bg-white rounded-2xl border border-gray-100 h-80 animate-pulse" />
           ))}
@@ -148,7 +150,7 @@ function ProductListInner() {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+          <div className="mb-10 grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-4">
             {products.map((product) => (
               <ProductCard key={product.id} product={product} />
             ))}

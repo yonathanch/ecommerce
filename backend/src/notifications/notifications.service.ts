@@ -12,6 +12,9 @@ export type NotificationType =
   | 'PAYMENT_FAILED'
   | 'RESERVATION_EXPIRED'
   | 'LOW_STOCK'
+  | 'REVIEW_SUBMITTED'
+  | 'REVIEW_PUBLISHED'
+  | 'REVIEW_REJECTED'
 
 export interface CreateNotificationInput {
   userId: string

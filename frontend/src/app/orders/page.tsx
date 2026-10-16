@@ -32,6 +32,9 @@ interface Order {
   shippingAddress: any
   createdAt: string
   expiresAt?: string | null
+  courier?: string | null
+  trackingNumber?: string | null
+  shippedAt?: string | null
   payments?: Array<{ id: string; status: string; provider: string; amount: number }>
   items: Array<{
     id: string
@@ -124,9 +127,10 @@ export default function OrdersPage() {
                   </p>
                 </div>
                 <span className={`px-3 py-1 rounded text-sm font-medium ${
-                  order.status === 'PAID' ? 'bg-green-100 text-green-800' :
+                  order.status === 'PAID' || order.status === 'DELIVERED' ? 'bg-green-100 text-green-800' :
                   order.status === 'PENDING' ? 'bg-yellow-100 text-yellow-800' :
-                  order.status === 'CANCELLED' ? 'bg-red-100 text-red-800' :
+                  order.status === 'SHIPPED' ? 'bg-blue-100 text-blue-800' :
+                  order.status === 'CANCELLED' || order.status === 'REFUNDED' ? 'bg-red-100 text-red-800' :
                   'bg-gray-100 text-gray-800'
                 }`}>
                   {order.status}
@@ -156,6 +160,18 @@ export default function OrdersPage() {
                   </p>
                 )}
                 <p className="text-lg font-bold">Total: {formatAmount(totalOf(order))}</p>
+
+                {// The resi an admin typed on the Pesanan screen, shown to the buyer.
+                order.shippedAt && (
+                  <p className="text-sm mb-2">
+                    <span className="font-medium">Pengiriman:</span>{' '}
+                    {order.courier ?? 'kurir belum diisi'}
+                    {order.trackingNumber ? ` · resi ${order.trackingNumber}` : ' · nomor resi belum tersedia'}
+                    <span className="block text-xs text-gray-500">
+                      Dikirim {new Date(order.shippedAt).toLocaleString()}
+                    </span>
+                  </p>
+                )}
 
                 {order.status === 'PENDING' && order.expiresAt && (
                   <p className="text-xs text-gray-500 mt-2">

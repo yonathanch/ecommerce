@@ -10,12 +10,14 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common'
+import { ApiTags } from '@nestjs/swagger'
 import { OrdersService } from './orders.service'
 import { CreateOrderDto } from './dto/create-order.dto'
 import { CheckoutDto } from './dto/checkout.dto'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 import { Roles, RolesGuard } from '../auth/roles.guard'
 
+@ApiTags('orders')
 @Controller('orders')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class OrdersController {

@@ -16,9 +16,16 @@ Architecture: `Next.js → REST (fetch/axios) → NestJS (Controller → Service
 
 Implemented milestones: M1 foundation · M2 auth (JWT + refresh rotation + roles) · M3 catalog · M4 cart/wishlist/coupons ·
 M5 addresses/checkout · **M6 payments (signed webhooks, idempotency)** · **M7 inventory (reserve → deduct, ledger, low-stock alerts)** ·
-**M8 admin dashboard (`/admin`: stats, orders + fulfilment state machine, products, inventory, customers)**.
-Still open: Redis usage, BullMQ jobs, Socket.IO, TanStack Query migration, Swagger, helmet/rate limiting, reviews, automated tests in CI,
-per-variant stock in the sales path and product image upload — see the limitation sections of the
+**M8 admin dashboard (`/admin`: stats, real analytics, orders + fulfilment state machine with shipments and tracking numbers,
+products with brand/gallery/variant editing, brands, categories, discounts, inventory, customers with order history)** ·
+**M9 product reviews (purchase-verified buyers, admin moderation queue, storefront rating summary)** ·
+**M10 per-variant stock in the sales path (cart, holds, capture, refund and admin adjust all operate on the
+specific SKU; a variant product's stock is the derived sum of its SKUs)** ·
+**M11 admin notification bell and a working Ctrl+K palette (one cross-domain `/admin/search` query, the
+palette's rows linked to the screens that own them, and new-order/payment-failure events reaching every
+admin)**.
+Still open: Redis usage, BullMQ jobs, Socket.IO, TanStack Query migration, automated tests in CI and
+product image upload — see the limitation sections of the
 [M6/M7 report](docs/m6-m7-payment-inventory.md#8-potensi-masalah--keterbatasan) and the
 [M8 report](docs/m8-admin-dashboard.md#6-potensi-masalah--keterbatasan).
 
@@ -85,7 +92,9 @@ All routes are prefixed with `/api`. Authenticated routes need `Authorization: B
 | Payment providers | `PAYMENT_PROVIDER=mock` (local sandbox gateway at `/pay/[ref]`) or `midtrans` (Snap; sandbox by default) |
 | Inventory (M7) | `GET /inventory/availability/:productId` · `GET /inventory/low-stock` · `GET /inventory/history` · `POST /inventory/adjust` (last three ADMIN) |
 | Notifications | `GET /notifications` · `GET /notifications/unread-count` · `POST /notifications/:id/read` · `POST /notifications/read-all` |
-| Admin (M8, ADMIN only) | `GET /admin/stats` · `GET /admin/orders` · `GET /admin/orders/:id` · `PATCH /admin/orders/:id/status` · `GET /admin/inventory` · `GET /admin/customers` |
+| Reviews (M9) | `GET /reviews/product/:productId` (public) · `GET /reviews/product/:productId/state` · `POST /reviews/product/:productId` · `GET /reviews/mine` · `GET /admin/reviews` · `PATCH /admin/reviews/:id` (ADMIN) · `DELETE /admin/reviews/:id` (ADMIN) |
+| Admin (M8, ADMIN only) | `GET /admin/stats` · `GET /admin/analytics` · `GET /admin/orders` · `GET /admin/orders/:id` · `PATCH /admin/orders/:id/status` · `PATCH /admin/orders/:id/shipment` · `GET /admin/shipments` · `GET /admin/inventory` · `GET /admin/customers` · `GET /admin/customers/:id` · `GET|POST|PATCH|DELETE /admin/categories` · `GET|POST|PATCH|DELETE /admin/brands` · `GET|POST|PATCH|DELETE /admin/coupons` |
+| Admin search (M11) | `GET /admin/search?q=&limit=` (ADMIN) — backs the Ctrl+K palette: products by name/SKU, orders by id/customer, customers, each group capped at `limit` (max 10) |
 | Health | `GET /health` |
 
 Global `ValidationPipe` validates all request DTOs (`whitelist` + `forbidNonWhitelisted`), and every error
@@ -94,9 +103,29 @@ uses one envelope: `{ statusCode, error, message, path, timestamp }` (no stack t
 ### Checkout → payment flow
 
 Checkout creates a `PENDING` order and **holds** stock (`StockReservation`, TTL 30 minutes) without touching
-`Product.stock`. On-hand stock is deducted only when a signed payment webhook is verified. Availability shown
+on-hand stock. On-hand stock is deducted only when a signed payment webhook is verified. Availability shown
 to shoppers is `stock − active reservations` (`reserved` / `available` fields on product payloads).
 In development, `PAYMENT_PROVIDER=mock` renders a local sandbox gateway at `/pay/[ref]`.
+
+Stock is **variant-aware end to end**. A product with variants derives its `Product.stock` from the sum of
+its SKUs, and a cart line for such a product must name a variant — that SKU's stock and price are what the
+line holds and charges. Holds (`StockReservation.variantSku`), payment capture, refund restock and the
+admin stock adjustment all move the specific SKU, and every variant movement mirrors onto the product-level
+total so catalog availability and low-stock alerts stay correct. A product-level stock adjustment is
+refused once a product has variants (it would desync the derived total); adjust a specific SKU instead.
+A product with no variants behaves exactly as before, with its stock on the product row itself.
+
+Fulfilment lives on the order itself (`courier`, `trackingNumber`, `shippedAt`) rather than in a
+separate shipment table, because this shop ships one parcel per order. An admin marks a paid order
+shipped — optionally with the courier and tracking number — and the buyer then reads that tracking
+number on `/orders` and in their shipment notification. `/admin/shipments` lists what left the
+warehouse, flags the ones still missing a tracking number, and allows correcting one afterwards.
+
+### API documentation
+
+Interactive OpenAPI docs are served at `/api/docs` (Swagger UI, with an Authorize button for pasting an
+access token). The spec is generated from the controllers and DTOs, so it always matches the running
+code. It is disabled in production unless `SWAGGER_ENABLED=true`.
 
 ## Environment variables (backend)
 
@@ -108,6 +137,13 @@ PAYMENT_MOCK_SECRET=<64 hex chars> # used when PAYMENT_PROVIDER=mock
 PAYMENT_TTL_MINUTES=30
 STOCK_RESERVATION_TTL_MINUTES=30
 LOW_STOCK_THRESHOLD=5
+
+# Rate limiting (global guard + a stricter budget on auth routes)
+# All requests are helmet-secured and rate-limited per client IP, per route.
+RATE_LIMIT_TTL_MS=60000        # window for the global limit
+RATE_LIMIT_MAX=300             # requests per window per route (generous on purpose)
+AUTH_RATE_LIMIT_TTL_MS=60000   # window for signup/login/refresh
+AUTH_RATE_LIMIT_MAX=10         # much tighter: credential-stuffing guard
 
 # Midtrans Snap (free sandbox account: dashboard.sandbox.midtrans.com)
 MIDTRANS_SERVER_KEY=SB-Mid-server-...
@@ -126,15 +162,15 @@ point at `<public base url>/api/payments/webhook`.
 
 ## Testing
 
-HTTP end-to-end suites run against a live backend on `:3002` (they create their own users, and the M5
-suite removes the catalog fixtures it creates):
+HTTP end-to-end suites run against a live backend on `:3002` (they create their own users and their own
+catalog fixtures, and delete those fixtures when they finish, leaving the demo catalog untouched):
 
 ```bash
 cd backend
-node scripts/m4-e2e.mjs      # cart, wishlist, coupons            (46 checks)
-node scripts/m5-e2e.mjs      # addresses, checkout, stock holds     (49 checks)
-node scripts/m6-m7-e2e.mjs   # payments, webhooks, inventory, RBAC (75 checks)
-node scripts/m8-e2e.mjs      # admin API, fulfilment, refund, RBAC (71 checks)
+node scripts/m4-e2e.mjs      # cart, wishlist, coupons, variant lines   (56 checks)
+node scripts/m5-e2e.mjs      # addresses, checkout, stock holds         (49 checks)
+node scripts/m6-m7-e2e.mjs   # payments, webhooks, inventory, RBAC      (80 checks)
+node scripts/m8-e2e.mjs      # admin API, analytics, shipping, refund, RBAC, product form, brands, reviews, search, notifications (321 checks)
 ```
 
 ## Docs
@@ -144,9 +180,28 @@ node scripts/m8-e2e.mjs      # admin API, fulfilment, refund, RBAC (71 checks)
 
 ## Admin dashboard
 
-Signed-in staff (`ADMIN` role) manage the shop at `/admin`: overview metrics, order fulfilment
-(`PAID → SHIPPED → DELIVERED`, refund restores stock through the inventory ledger), product CRUD,
-inventory adjustments with a reason, and the customer list. Seeded admin: `admin@example.com` / `admin123`.
+Signed-in staff (`ADMIN` role) manage the shop at `/admin`: overview metrics, a real analytics screen
+(revenue and refunds, units sold, category breakdown, order-lifecycle funnel — all derived from paid
+orders, with no invented profit or visitor data), order fulfilment (`PAID → SHIPPED → DELIVERED` with
+courier and tracking number, refund restores stock through the inventory ledger), shipments with
+tracking-number corrections, product CRUD with brand/gallery/variant editing, brand, category and
+coupon management, inventory adjustments with a reason, and the customer list with per-customer order
+history. Seeded admin: `admin@example.com` / `admin123`.
+
+Product stock is only ever moved by the inventory ledger (which requires a reason), so the product
+form can edit a variant's SKU, options and price but not the stock of a variant that already exists.
+New SKUs accept an opening balance. On a product with variants, the product-level stock figure is
+derived — it is always the sum of the SKU balances — so only a variant-level adjustment is accepted.
+
+## Product reviews
+
+A customer who actually bought a product (paid, shipped, or delivered order — never cancelled or
+refunded) can write one review per product. Reviews land in a `PENDING` moderation queue that
+notifies admins; only `PUBLISHED` reviews are ever visible on the storefront. The product page shows
+a rating summary (average, count, 1–5★ distribution) and the published reviews; the buyer sees their
+own pending review and a confirmation message, while guests see a hint to sign in. Admins moderate
+from `/admin/reviews`: approve, reject, reply (which appears publicly under the review), or delete
+for spam. Publishing/rejecting notifies the author.
 
 ## CI
 

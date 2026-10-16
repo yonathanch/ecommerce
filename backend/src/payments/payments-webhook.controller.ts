@@ -7,6 +7,7 @@ import {
   RawBodyRequest,
   Req,
 } from '@nestjs/common'
+import { ApiTags } from '@nestjs/swagger'
 import { Request } from 'express'
 import { PaymentsService } from './payments.service'
 
@@ -16,6 +17,7 @@ import { PaymentsService } from './payments.service'
  * token. The raw body is required for that verification, so Nest is started
  * with `rawBody: true`.
  */
+@ApiTags('payments')
 @Controller('payments/webhook')
 export class PaymentsWebhookController {
   constructor(private readonly paymentsService: PaymentsService) {}

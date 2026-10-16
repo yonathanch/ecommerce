@@ -4,9 +4,10 @@ import { AdminService } from './admin.service'
 import { InventoryModule } from '../inventory/inventory.module'
 import { NotificationsModule } from '../notifications/notifications.module'
 import { CouponModule } from '../coupon/coupon.module'
+import { ReviewsModule } from '../reviews/reviews.module'
 
 @Module({
-  imports: [InventoryModule, NotificationsModule, CouponModule],
+  imports: [InventoryModule, NotificationsModule, CouponModule, ReviewsModule],
   controllers: [AdminController],
   providers: [AdminService],
 })

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import apiClient from '@/lib/api-client'
@@ -27,6 +27,8 @@ interface Variant {
   options: { color?: string; size?: string } & Record<string, string>
   price: number | null
   stock: number
+  /** Units of this SKU still buyable (stock minus holds on this SKU). */
+  available?: number
   imageUrl: string | null
 }
 
@@ -41,6 +43,35 @@ interface ProductDetail {
   category: string
   images: { url: string; alt: string | null }[]
   variants: Variant[]
+  /** Average and count of published reviews; both zero until one is published. */
+  rating?: { average: number; count: number }
+}
+
+interface Review {
+  id: string
+  rating: number
+  title: string | null
+  body: string
+  reply: string | null
+  createdAt: string
+  author: string
+}
+
+interface ReviewSummary {
+  count: number
+  average: number
+  distribution: Record<number, number>
+}
+
+/** A buyer's own review of any status, as /reviews/product/:id/state returns it. */
+interface MyReview {
+  id: string
+  rating: number
+  title: string | null
+  body: string
+  status: 'PENDING' | 'PUBLISHED' | 'REJECTED'
+  reply: string | null
+  createdAt: string
 }
 
 /** Variant axes present on this product, in stable display order. */
@@ -70,7 +101,30 @@ export default function ProductDetailPage() {
   const [inWishlist, setInWishlist] = useState(false)
   const [wishlistBusy, setWishlistBusy] = useState(false)
   const [buying, setBuying] = useState(false)
-  const { addToCart, error: cartError } = useCart()
+  const { addToCart, error: cartError, clearError: clearCartError } = useCart()
+
+  // The status banner floats over the buy controls, so a note that never
+  // clears would keep the quantity stepper unreachable — dismiss it instead.
+  useEffect(() => {
+    if (!message && !error && !cartError) return
+    const timer = setTimeout(() => {
+      setMessage('')
+      setError('')
+      clearCartError()
+    }, 4000)
+    return () => clearTimeout(timer)
+  }, [message, error, cartError, clearCartError])
+
+  // ------------------------------------------------------------- ulasan
+  const [reviews, setReviews] = useState<Review[]>([])
+  const [reviewSummary, setReviewSummary] = useState<ReviewSummary | null>(null)
+  const [myReview, setMyReview] = useState<MyReview | null>(null)
+  const [canReview, setCanReview] = useState(false)
+  const [reviewReason, setReviewReason] = useState<string | null>(null)
+  const [reviewDraft, setReviewDraft] = useState({ rating: 5, title: '', body: '' })
+  const [reviewBusy, setReviewBusy] = useState(false)
+  const [reviewError, setReviewError] = useState('')
+  const [reviewNotice, setReviewNotice] = useState('')
 
   useEffect(() => {
     const load = async () => {
@@ -96,6 +150,65 @@ export default function ProductDetailPage() {
       })
       .catch(() => {})
   }, [id])
+
+  const loadReviews = useCallback(async () => {
+    try {
+      const res = await apiClient.get(`/reviews/product/${id}`)
+      setReviews(res.data.items ?? [])
+      setReviewSummary(res.data.summary ?? null)
+    } catch {
+      // The list is decorative here; the product itself already loaded.
+    }
+  }, [id])
+
+  useEffect(() => {
+    void loadReviews()
+  }, [loadReviews])
+
+  // "May I review this?" — only asked when signed in, and only the answer of
+  // the server counts: it is the same eligibility check the POST enforces.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.localStorage.getItem('token')) return
+    apiClient
+      .get(`/reviews/product/${id}/state`)
+      .then((res) => {
+        setCanReview(Boolean(res.data?.canReview))
+        setReviewReason(res.data?.reason ?? null)
+        setMyReview(res.data?.review ?? null)
+      })
+      .catch(() => {})
+  }, [id])
+
+  const submitReview = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setReviewError('')
+    setReviewNotice('')
+    if (reviewDraft.body.trim().length < 5) {
+      setReviewError('Tulis ulasan minimal 5 huruf.')
+      return
+    }
+    setReviewBusy(true)
+    try {
+      await apiClient.post(`/reviews/product/${id}`, {
+        rating: reviewDraft.rating,
+        title: reviewDraft.title.trim() || undefined,
+        body: reviewDraft.body.trim(),
+      })
+      setCanReview(false)
+      setReviewDraft({ rating: 5, title: '', body: '' })
+      setReviewNotice(
+        'Terima kasih! Ulasan Anda dikirim dan menunggu moderasi toko sebelum tayang.',
+      )
+      // The author may see their own row immediately, still pending.
+      const state = await apiClient.get(`/reviews/product/${id}/state`)
+      setMyReview(state.data?.review ?? null)
+      setReviewReason(state.data?.reason ?? null)
+    } catch (e: any) {
+      setReviewError(e?.response?.data?.message ?? 'Gagal mengirim ulasan')
+    } finally {
+      setReviewBusy(false)
+    }
+  }
 
   const axes = useMemo(() => variantAxes(product?.variants ?? []), [product])
 
@@ -143,10 +256,11 @@ export default function ProductDetailPage() {
   }, [product, axes, selected])
 
   const activePrice = selectedVariant?.price ?? product?.price ?? 0
-  const variantStock = selectedVariant?.stock
+  // A variant line is capped by that SKU's own availability; without a variant,
+  // fall back to the product-level availability.
+  const variantAvailable = selectedVariant?.available ?? selectedVariant?.stock
   const productAvailable = product?.available ?? 0
-  // Variant stock is per-SKU; without a variant, fall back to product availability.
-  const maxQuantity = variantStock ?? productAvailable
+  const maxQuantity = axes.length > 0 ? (variantAvailable ?? 0) : productAvailable
   const soldOut = maxQuantity <= 0
 
   useEffect(() => {
@@ -167,9 +281,17 @@ export default function ProductDetailPage() {
     setError('')
     setMessage('')
     if (requireSignIn()) return
-    const result = await addToCart(id, quantity)
+    // A variant product must resolve to one specific SKU before it can be
+    // carted — that SKU's stock and price are what the line holds.
+    if (axes.length > 0 && !selectedVariant) {
+      setError('Pilih varian yang tersedia terlebih dahulu.')
+      return
+    }
+    const result = await addToCart(id, quantity, selectedVariant?.sku)
     if (result.ok) {
-      setMessage(`${quantity} × ${product?.name} masuk ke keranjang`)
+      setMessage(
+        `${quantity} × ${product?.name}${selectedVariant ? ` (${axes.map((a) => selected[a]).filter(Boolean).join(', ')})` : ''} masuk ke keranjang`,
+      )
     } else {
       setError(result.error ?? 'Gagal menambah ke keranjang')
     }
@@ -180,8 +302,12 @@ export default function ProductDetailPage() {
     setError('')
     setMessage('')
     if (requireSignIn()) return
+    if (axes.length > 0 && !selectedVariant) {
+      setError('Pilih varian yang tersedia terlebih dahulu.')
+      return
+    }
     setBuying(true)
-    const result = await addToCart(id, quantity)
+    const result = await addToCart(id, quantity, selectedVariant?.sku)
     if (result.ok) {
       window.location.href = '/checkout'
     } else {
@@ -305,13 +431,22 @@ export default function ProductDetailPage() {
           </h1>
 
           <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-500">
-            <span>
-              Terjual <span className="font-medium text-gray-700">100 rb+</span>
-            </span>
-            <span aria-hidden>·</span>
             <span className="flex items-center gap-1">
-              <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
-              <span className="font-medium text-gray-700">4.6</span> (15,2rb rating)
+              <Star
+                className={`h-4 w-4 ${
+                  (product.rating?.count ?? 0) > 0 ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'
+                }`}
+              />
+              {(product.rating?.count ?? 0) > 0 ? (
+                <>
+                  <span className="font-medium text-gray-700">
+                    {product.rating!.average.toFixed(1)}
+                  </span>{' '}
+                  ({product.rating!.count} ulasan)
+                </>
+              ) : (
+                <span>Belum ada ulasan</span>
+              )}
             </span>
           </div>
 
@@ -532,11 +667,191 @@ export default function ProductDetailPage() {
         </div>
       </div>
 
+      {/* --------------------------------------------------------- ulasan */}
+      <section className="mt-10 border-t pt-8" aria-label="Ulasan produk">
+        <div className="grid grid-cols-1 gap-8 lg:grid-cols-[280px_1fr]">
+          {/* ringkasan rating */}
+          <div className="lg:self-start">
+            <h2 className="text-lg font-semibold text-gray-900">Ulasan Pembeli</h2>
+            {reviewSummary && reviewSummary.count > 0 ? (
+              <>
+                <div className="mt-3 flex items-baseline gap-2">
+                  <span className="text-4xl font-bold text-gray-900">
+                    {reviewSummary.average.toFixed(1)}
+                  </span>
+                  <span className="flex items-center gap-0.5">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <Star
+                        key={star}
+                        className={`h-4 w-4 ${
+                          star <= Math.round(reviewSummary.average)
+                            ? 'fill-yellow-400 text-yellow-400'
+                            : 'text-gray-200'
+                        }`}
+                      />
+                    ))}
+                  </span>
+                </div>
+                <p className="mt-1 text-sm text-gray-500">
+                  Dari {reviewSummary.count} ulasan
+                </p>
+                <div className="mt-4 space-y-1.5">
+                  {[5, 4, 3, 2, 1].map((star) => {
+                    const n = reviewSummary.distribution[star] ?? 0
+                    const pct = reviewSummary.count ? (n / reviewSummary.count) * 100 : 0
+                    return (
+                      <div key={star} className="flex items-center gap-2 text-xs text-gray-500">
+                        <span className="w-3 text-right tabular-nums">{star}</span>
+                        <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                        <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-gray-100">
+                          <span
+                            className="block h-full rounded-full bg-yellow-400"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </span>
+                        <span className="w-6 text-right tabular-nums">{n}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            ) : (
+              <p className="mt-3 text-sm text-gray-500">
+                Belum ada ulasan tayang untuk produk ini.
+              </p>
+            )}
+
+            {/* form ulasan pembeli */}
+            <div className="mt-6 rounded-lg border border-gray-200 p-4">
+              {reviewNotice ? (
+                <p className="text-sm leading-relaxed text-green-700">{reviewNotice}</p>
+              ) : myReview ? (
+                <>
+                  <p className="text-sm font-medium text-gray-900">Ulasan Anda</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {myReview.status === 'PENDING' &&
+                      'Menunggu moderasi toko — belum tayang untuk pembeli lain.'}
+                    {myReview.status === 'PUBLISHED' && 'Ulasan Anda sudah tayang.'}
+                    {myReview.status === 'REJECTED' &&
+                      'Ulasan Anda tidak lolos moderasi toko.'}
+                  </p>
+                  {myReview.reply && (
+                    <p className="mt-2 rounded bg-gray-50 p-2 text-xs text-gray-600">
+                      Balasan toko: {myReview.reply}
+                    </p>
+                  )}
+                </>
+              ) : canReview ? (
+                <form onSubmit={submitReview} className="space-y-3">
+                  <p className="text-sm font-medium text-gray-900">Tulis ulasan</p>
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <button
+                        key={star}
+                        type="button"
+                        aria-label={`Beri ${star} bintang`}
+                        onClick={() => setReviewDraft((d) => ({ ...d, rating: star }))}
+                      >
+                        <Star
+                          className={`h-5 w-5 transition ${
+                            star <= reviewDraft.rating
+                              ? 'fill-yellow-400 text-yellow-400'
+                              : 'text-gray-300 hover:text-yellow-300'
+                          }`}
+                        />
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    value={reviewDraft.title}
+                    onChange={(e) => setReviewDraft((d) => ({ ...d, title: e.target.value }))}
+                    placeholder="Ringkasan (opsional)"
+                    maxLength={120}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-600"
+                  />
+                  <textarea
+                    value={reviewDraft.body}
+                    onChange={(e) => setReviewDraft((d) => ({ ...d, body: e.target.value }))}
+                    placeholder="Ceritakan pengalaman Anda memakai produk ini…"
+                    rows={4}
+                    maxLength={2000}
+                    required
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-600"
+                  />
+                  {reviewError && <p className="text-sm text-red-600">{reviewError}</p>}
+                  <button
+                    type="submit"
+                    disabled={reviewBusy}
+                    className="h-9 rounded-md bg-green-600 px-4 text-sm font-semibold text-white transition hover:bg-green-700 disabled:opacity-50"
+                  >
+                    {reviewBusy ? 'Mengirim…' : 'Kirim ulasan'}
+                  </button>
+                </form>
+              ) : (
+                <p className="text-sm leading-relaxed text-gray-500">
+                  {reviewReason === 'NOT_PURCHASED'
+                    ? 'Hanya pembeli yang sudah membeli produk ini yang dapat mengulasnya.'
+                    : 'Masuk dengan akun pembeli Anda untuk mengulas produk ini.'}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* daftar ulasan tayang */}
+          <div>
+            {reviews.length === 0 ? (
+              <p className="py-8 text-center text-sm text-gray-500">
+                Belum ada ulasan tayang.
+              </p>
+            ) : (
+              <ul className="divide-y divide-gray-100">
+                {reviews.map((review) => (
+                  <li key={review.id} className="py-4 first:pt-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-gray-900">{review.author}</span>
+                      <span className="flex items-center gap-0.5">
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <Star
+                            key={star}
+                            className={`h-3.5 w-3.5 ${
+                              star <= review.rating
+                                ? 'fill-yellow-400 text-yellow-400'
+                                : 'text-gray-200'
+                            }`}
+                          />
+                        ))}
+                      </span>
+                      <span className="text-xs text-gray-400">
+                        {new Date(review.createdAt).toLocaleDateString('id-ID', {
+                          day: 'numeric',
+                          month: 'long',
+                          year: 'numeric',
+                        })}
+                      </span>
+                    </div>
+                    {review.title && (
+                      <p className="mt-1.5 text-sm font-semibold text-gray-900">{review.title}</p>
+                    )}
+                    <p className="mt-1 text-sm leading-relaxed text-gray-600">{review.body}</p>
+                    {review.reply && (
+                      <div className="mt-2 rounded-md bg-gray-50 p-3">
+                        <p className="text-xs font-semibold text-gray-700">Balasan toko</p>
+                        <p className="mt-0.5 text-sm text-gray-600">{review.reply}</p>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </section>
+
       {/* pesan status */}
       {(message || error || cartError) && (
-        <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
+        <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
           <div
-            className={`rounded-lg px-4 py-3 text-sm shadow-lg ${
+            className={`pointer-events-auto max-w-full rounded-lg px-4 py-3 text-sm shadow-lg ${
               error || cartError
                 ? 'bg-red-600 text-white'
                 : 'bg-green-600 text-white'

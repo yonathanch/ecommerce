@@ -115,3 +115,30 @@
 .animate-fade-in-up {
   animation: fade-in-up 0.5s ease-out both;
 }
+
+/* Admin overlay animations — Sheet (right drawer) and Dialog (modal).
+   Kept dependency-free and scoped to utility classes so the hand-rolled admin
+   kit can animate without pulling in a headless UI runtime. */
+@keyframes overlay-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-overlay-fade {
+  animation: overlay-fade 0.15s ease-out both;
+}
+
+@keyframes sheet-in-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+.animate-sheet-in-right {
+  animation: sheet-in-right 0.25s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.animate-dialog-in {
+  animation: dialog-in 0.18s ease-out both;
+}

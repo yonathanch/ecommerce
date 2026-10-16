@@ -7,9 +7,11 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common'
+import { ApiTags } from '@nestjs/swagger'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 import { CouponService, ValidateCouponRequest } from './coupon.service'
 
+@ApiTags('coupons')
 @Controller('coupons')
 @UseGuards(JwtAuthGuard)
 export class CouponController {

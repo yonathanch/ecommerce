@@ -304,6 +304,18 @@ export class PaymentsService {
             tx,
           )
 
+          // Also worth an admin's attention: the order stays PENDING and its
+          // holds keep counting down, so somebody may need to reach the buyer.
+          await this.notifications.notifyAdmins(
+            {
+              type: 'PAYMENT_FAILED',
+              title: `Pembayaran gagal untuk pesanan ${payment.order.id.slice(0, 8)}`,
+              body: `Pembayaran ditolak gateway. Pesanan tetap menunggu pembayaran hingga hold-nya kedaluwarsa.`,
+              meta: { orderId: payment.order.id, paymentId: payment.id },
+            },
+            tx,
+          )
+
           return { applied: true, reason: 'payment-failed' as const }
         }
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import apiClient from '@/lib/api-client'
+import { Sheet } from '@/components/admin/overlay'
 import {
   ORDER_STATUS_LABELS,
   ORDER_STATUS_STYLES,
@@ -27,6 +28,9 @@ interface AdminOrder {
   payments: Array<{ id: string; status: string; provider: string; amount: number; createdAt: string }>
   allowedTransitions?: string[]
   reservations?: Array<{ productId: string; quantity: number; status: string }>
+  courier: string | null
+  trackingNumber: string | null
+  shippedAt: string | null
 }
 
 const errorMessage = (e: any, fallback: string) => {
@@ -44,7 +48,13 @@ export default function AdminOrdersPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [detail, setDetail] = useState<AdminOrder | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState('')
+  const [notice, setNotice] = useState('')
   const [reason, setReason] = useState('')
+  // Authored here on the way to SHIPPED; what the customer then reads as a resi.
+  const [courier, setCourier] = useState('')
+  const [tracking, setTracking] = useState('')
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
@@ -65,12 +75,33 @@ export default function AdminOrdersPage() {
   }, [page, status, query])
 
   const openDetail = useCallback(async (id: string) => {
+    setDetailLoading(true)
+    setDetailError('')
+    setNotice('')
+    // Clear the transient action fields so a previous order's draft never leaks
+    // into the order that is about to open.
+    setReason('')
+    setCourier('')
+    setTracking('')
     try {
       const res = await apiClient.get(`/admin/orders/${id}`)
       setDetail(res.data)
     } catch (e: any) {
-      setError(errorMessage(e, 'Gagal memuat detail pesanan'))
+      setDetailError(errorMessage(e, 'Gagal memuat detail pesanan'))
+    } finally {
+      setDetailLoading(false)
     }
+  }, [])
+
+  // Closing the sheet drops the record and every transient action field, so a
+  // later open starts clean.
+  const closeDetail = useCallback(() => {
+    setDetail(null)
+    setDetailError('')
+    setNotice('')
+    setReason('')
+    setCourier('')
+    setTracking('')
   }, [])
 
   useEffect(() => {
@@ -86,17 +117,30 @@ export default function AdminOrdersPage() {
   const changeStatus = async (next: string) => {
     if (!detail) return
     setBusy(true)
-    setError('')
+    // Feedback lives inside the sheet, because that is where the user is looking.
+    setDetailError('')
+    setNotice('')
     try {
       const res = await apiClient.patch(`/admin/orders/${detail.id}/status`, {
         status: next,
         ...(reason ? { reason } : {}),
+        // Only sent on dispatch, and only when filled: the fields are optional
+        // on the API because a resi is sometimes not known yet.
+        ...(next === 'SHIPPED'
+          ? {
+              ...(courier.trim() ? { courier: courier.trim() } : {}),
+              ...(tracking.trim() ? { trackingNumber: tracking.trim() } : {}),
+            }
+          : {}),
       })
       setDetail(res.data)
+      setNotice(`Status diperbarui menjadi ${ORDER_STATUS_LABELS[next] ?? next}.`)
+      setCourier('')
+      setTracking('')
       setReason('')
       await load()
     } catch (e: any) {
-      setError(errorMessage(e, 'Gagal mengubah status pesanan'))
+      setDetailError(errorMessage(e, 'Gagal mengubah status pesanan'))
     } finally {
       setBusy(false)
     }
@@ -246,24 +290,52 @@ export default function AdminOrdersPage() {
         </div>
       )}
 
-      {detail && (
-        <section className="rounded-xl bg-white py-4 ring-1 ring-neutral-900/10">
-          <div className="flex items-center justify-between px-4 pb-4">
-            <div>
-              <h2 className="font-semibold text-neutral-900">Detail pesanan</h2>
-              <p className="font-mono text-xs text-neutral-500">{detail.id}</p>
+      <Sheet
+        open={detailLoading || Boolean(detail)}
+        onClose={closeDetail}
+        busy={busy}
+        title="Detail pesanan"
+        subtitle={detail ? <span className="font-mono text-xs">{detail.id}</span> : undefined}
+        maxWidth="sm:max-w-xl lg:max-w-2xl"
+        footer={
+          detail ? (
+            <div className="flex w-full flex-wrap items-center justify-between gap-2">
+              <span className="text-xs text-neutral-500">
+                {ORDER_STATUS_LABELS[detail.status] ?? detail.status}
+              </span>
+              <button
+                type="button"
+                onClick={closeDetail}
+                className="h-8 rounded-lg border border-neutral-200 px-3 text-sm font-medium text-neutral-900 transition hover:bg-neutral-100"
+              >
+                Tutup
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setDetail(null)}
-              className="h-7 rounded-lg border border-neutral-200 px-2.5 text-xs font-medium text-neutral-700 hover:bg-neutral-100"
-            >
-              Tutup
-            </button>
+          ) : undefined
+        }
+      >
+        {detailLoading ? (
+          <div className="space-y-3" aria-live="polite">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="h-8 animate-pulse rounded-lg bg-neutral-100" />
+            ))}
+            <p className="text-sm text-neutral-500">Memuat detail pesanan…</p>
           </div>
+        ) : !detail ? null : (
+          <div className="space-y-4">
+            {detailError && (
+              <p className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+                {detailError}
+              </p>
+            )}
+            {notice && (
+              <p className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                {notice}
+              </p>
+            )}
 
-          <div className="grid gap-6 p-4 lg:grid-cols-2">
-            <div className="space-y-4">
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="space-y-4">
               <div>
                 <p className="text-xs font-medium text-neutral-500">Item</p>
                 <ul className="mt-1 space-y-1 text-sm">
@@ -337,6 +409,26 @@ export default function AdminOrdersPage() {
                 </p>
               </div>
 
+              <div>
+                <p className="text-xs font-medium text-neutral-500">Pengiriman</p>
+                {detail.shippedAt ? (
+                  <ul className="mt-1 space-y-0.5 text-sm text-neutral-700">
+                    <li>Dikirim {formatDateTime(detail.shippedAt)}</li>
+                    <li>Kurir: {detail.courier ?? '—'}</li>
+                    <li>
+                      Resi:{' '}
+                      {detail.trackingNumber ? (
+                        <span className="font-mono text-xs">{detail.trackingNumber}</span>
+                      ) : (
+                        '—'
+                      )}
+                    </li>
+                  </ul>
+                ) : (
+                  <p className="mt-1 text-sm text-neutral-500">Belum dikirim.</p>
+                )}
+              </div>
+
               {detail.reservations && detail.reservations.length > 0 && (
                 <div>
                   <p className="text-xs font-medium text-neutral-500">Stok ditahan</p>
@@ -366,6 +458,22 @@ export default function AdminOrdersPage() {
                         className="w-full h-9 rounded-lg border border-neutral-200 px-3 text-sm"
                       />
                     )}
+                    {detail.allowedTransitions?.includes('SHIPPED') && (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <input
+                          value={courier}
+                          onChange={(e) => setCourier(e.target.value)}
+                          placeholder="Kurir (opsional, mis. JNE Reguler)"
+                          className="w-full h-9 rounded-lg border border-neutral-200 px-3 text-sm"
+                        />
+                        <input
+                          value={tracking}
+                          onChange={(e) => setTracking(e.target.value)}
+                          placeholder="Nomor resi (opsional) — tampil di pesanan pelanggan"
+                          className="w-full h-9 rounded-lg border border-neutral-200 px-3 font-mono text-sm"
+                        />
+                      </div>
+                    )}
                     <div className="flex flex-wrap gap-2">
                       {detail.allowedTransitions?.map((next) => (
                         <button
@@ -388,8 +496,9 @@ export default function AdminOrdersPage() {
               </div>
             </div>
           </div>
-        </section>
-      )}
+          </div>
+        )}
+      </Sheet>
     </div>
   )
 }

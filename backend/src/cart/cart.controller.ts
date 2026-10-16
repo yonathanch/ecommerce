@@ -6,14 +6,17 @@ import {
   Body,
   Param,
   Put,
+  Query,
   UseGuards,
   Request,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common'
+import { ApiTags } from '@nestjs/swagger'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 import { CartService, CartItemDto } from './cart.service'
 
+@ApiTags('cart')
 @Controller('cart')
 @UseGuards(JwtAuthGuard)
 export class CartController {
@@ -37,17 +40,23 @@ export class CartController {
   async updateQuantity(
     @Request() req: { user: { id: string } },
     @Param('productId') productId: string,
-    @Body() body: { quantity: number },
+    @Body() body: { quantity: number; variantSku?: string },
   ) {
-    return this.cartService.updateQuantity(req.user.id, productId, body.quantity)
+    return this.cartService.updateQuantity(
+      req.user.id,
+      productId,
+      body.quantity,
+      body.variantSku,
+    )
   }
 
   @Delete('items/:productId')
   async removeItem(
     @Request() req: { user: { id: string } },
     @Param('productId') productId: string,
+    @Query('variantSku') variantSku?: string,
   ) {
-    return this.cartService.removeItem(req.user.id, productId)
+    return this.cartService.removeItem(req.user.id, productId, variantSku)
   }
 
   @Post('clear')

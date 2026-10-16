@@ -10,20 +10,33 @@ export interface CartItemDto {
   productId: string
   quantity: number
   /**
-   * If the product has variants, the chosen variant's SKU. Used only to
-   * validate stock (cart rows are stored per product).
+   * If the product has variants, the chosen variant's SKU. A cart line for a
+   * variant product must name one — that SKU's stock and price are what the
+   * line holds and charges.
    */
   variantSku?: string
+}
+
+/** The variant a cart line points at, for display and pricing. */
+export interface CartVariant {
+  sku: string
+  options: Record<string, string>
+  price: number | null
+  stock: number
+  imageUrl: string | null
 }
 
 export interface CartSummary {
   cart: Array<{
     id: string
     productId: string
+    variantSku: string | null
     quantity: number
     unitPrice: number
     lineTotal: number
+    /** Available units for this exact line (variant when named, else product). */
     stock: number
+    variant: CartVariant | null
     product: {
       id: string
       name: string
@@ -56,28 +69,54 @@ export class CartService {
   ) {}
 
   /**
-   * Resolve a product's stock for a cart item.
+   * Resolve the available units a cart line may draw from.
    *
-   * A product's SKUs are unique per purchasable combination, so callers may
-   * send `variantSku` to validate against the variant instead of the
-   * product-level stock.
+   * A variant line judges against that SKU's stock minus its own holds; a base
+   * line judges against the product's availability (stock minus all holds).
+   * Either way the cart must use *available* units, not raw stock, otherwise
+   * checkout would reject the item later.
    */
-  async getStock(productId: string, variantSku?: string): Promise<number> {
+  private async getStock(
+    productId: string,
+    variantSku?: string,
+  ): Promise<number> {
     if (variantSku) {
-      const variant = await this.prisma.productVariant.findUnique({
-        where: { sku: variantSku },
-        select: { stock: true, productId: true },
-      })
-      if (!variant || variant.productId !== productId) {
-        throw new NotFoundException('Variant not found for this product')
-      }
-      return variant.stock
+      const availability = await this.inventory.variantAvailability(
+        productId,
+        variantSku,
+      )
+      return availability.available
     }
 
-    // The cart must judge against *available* units (stock minus what unpaid
-    // orders are holding), otherwise checkout would reject the item later.
     const { available } = await this.inventory.availability(productId)
     return available
+  }
+
+  /** Load the variants named on these cart rows, keyed by SKU. */
+  private async loadVariants(skus: string[]) {
+    if (skus.length === 0) return new Map<string, CartVariant>()
+    const rows = await this.prisma.productVariant.findMany({
+      where: { sku: { in: skus } },
+      select: {
+        sku: true,
+        options: true,
+        price: true,
+        stock: true,
+        imageUrl: true,
+      },
+    })
+    return new Map(
+      rows.map((row) => [
+        row.sku,
+        {
+          sku: row.sku,
+          options: row.options as Record<string, string>,
+          price: row.price,
+          stock: row.stock,
+          imageUrl: row.imageUrl,
+        },
+      ]),
+    )
   }
 
   /**
@@ -107,16 +146,25 @@ export class CartService {
       orderBy: { id: 'asc' },
     })
 
+    const variants = await this.loadVariants(
+      [...new Set(items.map((i) => i.variantSku).filter((s) => s !== ''))],
+    )
+
     const mapped = items.map((item) => {
-      const unitPrice = item.product?.price ?? 0
-      const stock = item.product?.stock ?? 0
+      const variant = item.variantSku ? variants.get(item.variantSku) ?? null : null
+      // A variant line prices at its own price (falling back to the base price);
+      // a base line prices at the product price.
+      const unitPrice = variant ? variant.price ?? item.product?.price ?? 0 : item.product?.price ?? 0
+      const stock = variant ? variant.stock : item.product?.stock ?? 0
       return {
         id: item.id,
         productId: item.productId,
+        variantSku: item.variantSku === '' ? null : item.variantSku,
         quantity: item.quantity,
         unitPrice,
         lineTotal: Math.round(unitPrice * item.quantity * 100) / 100,
         stock,
+        variant,
         product: item.product
           ? {
               id: item.product.id,
@@ -144,11 +192,26 @@ export class CartService {
       throw new BadRequestException('Quantity must be a whole number >= 1')
     }
 
-    const stock = await this.getStock(productId, variantSku)
+    const sku = variantSku?.trim() ?? ''
+
+    // A variant product must name a variant; otherwise the line would hold the
+    // derived product total instead of a specific SKU's stock.
+    if (!sku) {
+      const variantCount = await this.prisma.productVariant.count({
+        where: { productId },
+      })
+      if (variantCount > 0) {
+        throw new BadRequestException('This product has variants — choose one')
+      }
+    }
+
+    const stock = await this.getStock(productId, sku || undefined)
     const cart = await this.getOrCreateCart(userId)
 
     const existing = await this.prisma.cartItem.findUnique({
-      where: { cartId_productId: { cartId: cart.id, productId } },
+      where: {
+        cartId_productId_variantSku: { cartId: cart.id, productId, variantSku: sku },
+      },
     })
 
     const next = (existing?.quantity ?? 0) + qty
@@ -162,9 +225,11 @@ export class CartService {
     }
 
     const item = await this.prisma.cartItem.upsert({
-      where: { cartId_productId: { cartId: cart.id, productId } },
+      where: {
+        cartId_productId_variantSku: { cartId: cart.id, productId, variantSku: sku },
+      },
       update: { quantity: next },
-      create: { cartId: cart.id, productId, quantity: next },
+      create: { cartId: cart.id, productId, variantSku: sku, quantity: next },
     })
 
     await this.prisma.cart.update({
@@ -175,21 +240,29 @@ export class CartService {
     return { item, cart: (await this.getCart(userId)).cart }
   }
 
-  async updateQuantity(userId: string, productId: string, quantity: number) {
+  async updateQuantity(
+    userId: string,
+    productId: string,
+    quantity: number,
+    variantSku?: string,
+  ) {
     const qty = Number(quantity)
     if (!Number.isInteger(qty) || qty < 0) {
       throw new BadRequestException('Quantity must be a whole number >= 0')
     }
 
+    const sku = variantSku?.trim() ?? ''
     const cart = await this.getOrCreateCart(userId)
     const item = await this.prisma.cartItem.findUnique({
-      where: { cartId_productId: { cartId: cart.id, productId } },
+      where: {
+        cartId_productId_variantSku: { cartId: cart.id, productId, variantSku: sku },
+      },
     })
     if (!item) throw new NotFoundException('Item not in cart')
 
-    const stock = await this.getStock(productId)
+    const stock = await this.getStock(productId, sku || undefined)
 
-    // quantity 0 (or a product that ran out of stock) removes the line item.
+    // quantity 0 (or a line that ran out of stock) removes the line item.
     if (qty === 0 || stock === 0) {
       await this.prisma.cartItem.delete({ where: { id: item.id } })
       return this.getCart(userId)
@@ -203,10 +276,13 @@ export class CartService {
     return this.getCart(userId)
   }
 
-  async removeItem(userId: string, productId: string) {
+  async removeItem(userId: string, productId: string, variantSku?: string) {
+    const sku = variantSku?.trim() ?? ''
     const cart = await this.getOrCreateCart(userId)
     const item = await this.prisma.cartItem.findUnique({
-      where: { cartId_productId: { cartId: cart.id, productId } },
+      where: {
+        cartId_productId_variantSku: { cartId: cart.id, productId, variantSku: sku },
+      },
     })
     if (!item) throw new NotFoundException('Item not in cart')
 

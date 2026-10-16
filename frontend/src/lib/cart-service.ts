@@ -11,13 +11,25 @@ export interface CartProduct {
   images: { url: string; alt: string | null }[]
 }
 
+/** The variant a cart line points at, when it names one. */
+export interface CartVariant {
+  sku: string
+  options: Record<string, string>
+  price: number | null
+  stock: number
+  imageUrl: string | null
+}
+
 export interface CartLine {
   id: string
   productId: string
+  /** null when the line is the base product (no variants). */
+  variantSku: string | null
   quantity: number
   unitPrice: number
   lineTotal: number
   stock: number
+  variant: CartVariant | null
   product: CartProduct | null
 }
 
@@ -97,10 +109,14 @@ export async function refreshCart() {
   }
 }
 
-export async function addToCart(productId: string, quantity = 1) {
+export async function addToCart(productId: string, quantity = 1, variantSku?: string) {
   setState({ error: null })
   try {
-    await apiClient.post('/cart/items', { productId, quantity })
+    await apiClient.post('/cart/items', {
+      productId,
+      quantity,
+      ...(variantSku ? { variantSku } : {}),
+    })
     await refreshCart()
     return { ok: true as const }
   } catch (error: any) {
@@ -110,10 +126,17 @@ export async function addToCart(productId: string, quantity = 1) {
   }
 }
 
-export async function updateQuantity(productId: string, quantity: number) {
+export async function updateQuantity(
+  productId: string,
+  quantity: number,
+  variantSku?: string,
+) {
   setState({ error: null })
   try {
-    await apiClient.put(`/cart/items/${productId}`, { quantity })
+    await apiClient.put(`/cart/items/${productId}`, {
+      quantity,
+      ...(variantSku ? { variantSku } : {}),
+    })
     await refreshCart()
     return { ok: true as const }
   } catch (error: any) {
@@ -123,10 +146,12 @@ export async function updateQuantity(productId: string, quantity: number) {
   }
 }
 
-export async function removeItem(productId: string) {
+export async function removeItem(productId: string, variantSku?: string) {
   setState({ error: null })
   try {
-    await apiClient.delete(`/cart/items/${productId}`)
+    await apiClient.delete(`/cart/items/${productId}`, {
+      params: variantSku ? { variantSku } : {},
+    })
     await refreshCart()
     return { ok: true as const }
   } catch (error: any) {
@@ -150,6 +175,11 @@ export function resetCart() {
   cartStore.reset()
 }
 
+/** Drops a stale cart error (used when its banner is dismissed). */
+export function clearCartError() {
+  setState({ error: null })
+}
+
 export function useCart() {
   const [snapshot, setSnapshot] = useState<CartState>(() => cartStore.get())
 
@@ -167,5 +197,6 @@ export function useCart() {
     updateQuantity,
     removeItem,
     clearCart,
+    clearError: clearCartError,
   }
 }

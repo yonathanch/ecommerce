@@ -126,13 +126,28 @@ async function main() {
   check('list exposes stock, reserved and available', ['stock', 'reserved', 'available'].every((k) => typeof list.data.items[0][k] === 'number'), JSON.stringify(list.data.items[0]))
 
   // ------------------------------------------------------------- fixtures
-  // A product with vendor stock so we can hold/reserve repeatedly. Test
-  // fixtures left behind by an interrupted suite are skipped on purpose.
-  const isSuiteFixture = (p) => /^M\d+ (Fixture|Kemeja|Sold Out|Race)/.test(p.name)
-  const fixture = list.data.items.find(
-    (p) => !isSuiteFixture(p) && p.available >= 6 && p.price >= 200000,
-  )
-  if (!fixture) throw new Error('no appropriate fixture product found')
+  // This suite mutates stock through the sales path, so it creates its own
+  // fixtures instead of borrowing the seed catalog (whose products all carry
+  // variants, and a cart line for those must name a SKU). Deleting them at the
+  // end leaves the demo catalog untouched.
+  const createFixture = async (name, price, stock, variants) => {
+    const res = await req('POST', '/products', {
+      token: admin,
+      body: {
+        name,
+        description: 'm6-m7 fixture',
+        price,
+        stock,
+        category: 'Baju Pria',
+        ...(variants ? { variants } : {}),
+      },
+    })
+    if (res.status !== 201) throw new Error(`create fixture failed ${res.status} ${JSON.stringify(res.data)}`)
+    return res.data
+  }
+
+  // Priced above the SUMMER20 minimum purchase (200000) so the coupon applies.
+  const fixture = await createFixture(`M6 Fixture Kemeja ${Date.now()}`, 320000, 10)
   const fixtureBefore = fixture.stock
   console.log(`\nfixture: ${fixture.name} (stock ${fixture.stock}, available ${fixture.available}, price ${fixture.price})`)
 
@@ -306,10 +321,7 @@ async function main() {
 
   // ------------------------------------------------------- oversell (race)
   console.log('\noversell: two buyers, last unit, concurrent checkout')
-  const raceProduct = list.data.items.find(
-    (p) => !isSuiteFixture(p) && p.id !== fixture.id && p.available >= 1,
-  )
-  const raceOriginalStock = (await product(raceProduct.id)).stock
+  const raceProduct = await createFixture(`M6 Race ${Date.now()}`, 50000, 5)
   await adjust({
     productId: raceProduct.id,
     delta: 1 - (await product(raceProduct.id)).stock,
@@ -356,9 +368,9 @@ async function main() {
   check('low-stock -> 200 list', res.status === 200 && Array.isArray(res.data), `${res.status}`)
   check('sold-out product is flagged', res.data.some((r) => r.productId === raceProduct.id && r.available === 0), JSON.stringify(res.data.slice(0, 3)))
 
-  const adjustProduct = list.data.items.find(
-    (p) => !isSuiteFixture(p) && p.id !== raceProduct.id && p.id !== fixture.id,
-  )
+  // A variant-less product carries its own stock, so a product-level adjust
+  // applies to it directly.
+  const adjustProduct = await createFixture(`M6 Adjust ${Date.now()}`, 100000, 20)
   const beforeAdjust = (await product(adjustProduct.id)).stock
   res = await adjust({ productId: adjustProduct.id, delta: 5, reason: 'e2e restock' })
   check('adjust +5 -> 200', res.status === 200 && res.data.stock === beforeAdjust + 5, `${res.status} ${JSON.stringify(res.data)}`)
@@ -367,19 +379,28 @@ async function main() {
   res = await adjust({ productId: adjustProduct.id, delta: 0, reason: 'e2e zero' })
   check('delta 0 -> 400', res.status === 400, `${res.status}`)
 
-  const variantSku = adjustProduct.variants?.[0]?.sku
-  const variantBefore = variantSku
-    ? (await product(adjustProduct.id)).variants?.find((v) => v.sku === variantSku)?.stock
-    : undefined
-  if (variantSku) {
-    res = await adjust({ productId: adjustProduct.id, variantSku, delta: 3, reason: 'e2e variant restock' })
-    check('variant adjustment -> 200', res.status === 200, `${res.status} ${JSON.stringify(res.data)}`)
-  }
+  // A product with variants has a *derived* stock (the sum of its SKUs), so a
+  // product-level adjust is refused — it would desync the total — and only a
+  // variant-level correction is accepted. The product total follows along.
+  const variantAdjust = await createFixture(`M6 Variant Adjust ${Date.now()}`, 100000, 0, [
+    { sku: `M6-ADJ-A-${Date.now()}`, options: { Warna: 'Hitam', Ukuran: '42' }, stock: 4 },
+    { sku: `M6-ADJ-B-${Date.now()}`, options: { Warna: 'Putih', Ukuran: '42' }, stock: 1 },
+  ])
+  check('variant fixture stock = sum of SKUs', variantAdjust.stock === 5, `${variantAdjust.stock}`)
+  res = await adjust({ productId: variantAdjust.id, delta: 3, reason: 'e2e product-level on variant product' })
+  check('product-level adjust on a variant product -> 400', res.status === 400, `${res.status} ${JSON.stringify(res.data)}`)
 
-  res = await req('GET', `/inventory/history?productId=${adjustProduct.id}`, { token: admin })
+  const variantSku = variantAdjust.variants[0].sku
+  const variantBefore = variantAdjust.variants[0].stock
+  res = await adjust({ productId: variantAdjust.id, variantSku, delta: 3, reason: 'e2e variant restock' })
+  check('variant adjustment -> 200', res.status === 200 && res.data.stock === variantBefore + 3, `${res.status} ${JSON.stringify(res.data)}`)
+  check('product stock follows the variant', (await product(variantAdjust.id)).stock === variantAdjust.stock + 3, `${(await product(variantAdjust.id)).stock}`)
+
+  res = await req('GET', `/inventory/history?productId=${variantAdjust.id}`, { token: admin })
   const adjustRows = res.data.filter((t) => t.type === 'ADJUST')
-  check('adjustment is in the ledger as ADJUST', adjustRows.length >= 2, JSON.stringify(res.data))
+  check('adjustment is in the ledger as ADJUST', adjustRows.length >= 1, JSON.stringify(res.data))
   check('ledger records the acting admin', adjustRows.every((t) => Boolean(t.userId)), JSON.stringify(adjustRows[0]))
+  check('variant ledger row records the SKU', adjustRows.every((t) => t.variantSku === variantSku), JSON.stringify(adjustRows[0]))
 
   // low stock alert notification for admins
   const adminNotifications = await req('GET', '/notifications', { token: admin })
@@ -430,36 +451,18 @@ async function main() {
   res = await req('POST', '/notifications/read-all', { token: buyer.token })
   check('mark all read -> 200', res.status === 200 && res.data.updated >= 1, JSON.stringify(res.data))
 
-  // --------------------------------------------------------------- restore
-  // The race drained a real catalog product and the adjust checks inflated
-  // another one; put both back so repeated runs leave the demo catalog intact.
-  console.log('\nrestore: putting the catalog back')
-  const restoreProduct = async (id, target, label) => {
-    const current = (await product(id)).stock
-    if (current === target) {
-      check(`${label} already back at ${target}`, true)
-      return
-    }
-    const res = await adjust({
-      productId: id,
-      delta: target - current,
-      reason: 'e2e: restore catalog stock',
-    })
-    check(`${label} stock restored to ${target}`, res.status === 200 && res.data.stock === target, `${res.status} ${JSON.stringify(res.data)}`)
-  }
-  await restoreProduct(raceProduct.id, raceOriginalStock, 'race product')
-  await restoreProduct(adjustProduct.id, beforeAdjust, 'adjust product')
-  if (variantSku && typeof variantBefore === 'number') {
-    const variantStockNow = (await product(adjustProduct.id)).variants?.find((v) => v.sku === variantSku)?.stock
-    if (variantStockNow !== variantBefore) {
-      const res = await adjust({
-        productId: adjustProduct.id,
-        variantSku,
-        delta: variantBefore - (variantStockNow ?? 0),
-        reason: 'e2e: restore variant stock',
-      })
-      check(`variant stock restored to ${variantBefore}`, res.status === 200, `${res.status}`)
-    }
+  // --------------------------------------------------------------- cleanup
+  // Every product this run created is deleted, so repeated runs leave the
+  // demo catalog exactly as they found it.
+  console.log('\ncleanup: removing fixtures from the catalog')
+  for (const [label, id] of [
+    ['fixture', fixture.id],
+    ['race product', raceProduct.id],
+    ['adjust product', adjustProduct.id],
+    ['variant adjust product', variantAdjust.id],
+  ]) {
+    const del = await req('DELETE', `/products/${id}`, { token: admin })
+    check(`${label} removed`, del.status === 200, `${del.status} ${JSON.stringify(del.data)}`)
   }
 
   // ------------------------------------------------------------ error shape

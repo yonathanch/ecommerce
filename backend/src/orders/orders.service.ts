@@ -68,8 +68,14 @@ export class OrdersService {
     })
     if (!address) throw new NotFoundException('Address not found')
 
+    // Resolve every cart line to its effective unit price and variant. A line
+    // that names a variant prices at that SKU's price (falling back to the base
+    // price); a variant product without a chosen variant is rejected here rather
+    // than silently charging the base price for a specific SKU.
+    const lines = await this.resolveCartLines(cart.items)
+
     const subtotal = round2(
-      cart.items.reduce((sum, item) => sum + item.product!.price * item.quantity, 0),
+      lines.reduce((sum, line) => sum + line.unitPrice * line.quantity, 0),
     )
 
     // Resolved before mutating anything so the user gets a clear error instead
@@ -103,11 +109,12 @@ export class OrdersService {
             },
             status: 'PENDING',
             items: {
-              create: cart.items.map((item) => ({
-                productId: item.productId,
-                productName: item.product!.name,
-                price: item.product!.price,
-                quantity: item.quantity,
+              create: lines.map((line) => ({
+                productId: line.productId,
+                productName: line.productName,
+                price: line.unitPrice,
+                quantity: line.quantity,
+                variantSku: line.variantSku,
               })),
             },
           },
@@ -117,10 +124,11 @@ export class OrdersService {
         const { expiresAt } = await this.inventory.reserveForOrder(tx, {
           orderId: created.id,
           userId,
-          items: cart.items.map<ReservationItem>((item) => ({
-            productId: item.productId,
-            productName: item.product!.name,
-            quantity: item.quantity,
+          items: lines.map<ReservationItem>((line) => ({
+            productId: line.productId,
+            productName: line.productName,
+            quantity: line.quantity,
+            variantSku: line.variantSku ?? undefined,
           })),
         })
 
@@ -147,7 +155,76 @@ export class OrdersService {
       meta: { orderId: order.id, totalPrice: order.totalPrice },
     })
 
+    // A new order is the one event the back-office cannot afford to miss, so
+    // every admin gets their own row (the notification feed is per-user). The
+    // buyer's row above is a different audience — neither replaces the other.
+    const buyer = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    })
+    await this.notifications.notifyAdmins({
+      type: 'ORDER_CREATED',
+      title: `Pesanan baru ${order.id.slice(0, 8)}`,
+      body: `${buyer?.email ?? 'Pembeli'} memesan ${order.items.length} item senilai Rp ${order.totalPrice.toLocaleString('id-ID')}.`,
+      meta: { orderId: order.id, totalPrice: order.totalPrice },
+    })
+
     return order
+  }
+
+  /**
+   * Turn raw cart rows into order lines with the price the buyer actually pays.
+   *
+   * A line carrying a variant SKU prices at that variant's price (falling back
+   * to the base product price when the variant has none of its own) and is
+   * validated to belong to the product. A variant product reached with no SKU
+   * is rejected — otherwise we would silently charge the base price for a
+   * specific size/colour and hold the wrong stock.
+   */
+  private async resolveCartLines(
+    items: Array<{
+      productId: string
+      variantSku: string
+      quantity: number
+      product: { id: string; name: string; price: number; stock: number } | null
+    }>,
+  ) {
+    const skus = [...new Set(items.map((i) => i.variantSku).filter((s) => s !== ''))]
+    const variants =
+      skus.length > 0
+        ? await this.prisma.productVariant.findMany({
+            where: { sku: { in: skus } },
+            select: { sku: true, productId: true, price: true },
+          })
+        : []
+    const bySku = new Map(variants.map((v) => [v.sku, v]))
+
+    return items.map((item) => {
+      const product = item.product!
+      if (!item.variantSku) {
+        return {
+          productId: item.productId,
+          productName: product.name,
+          variantSku: null,
+          unitPrice: product.price,
+          quantity: item.quantity,
+        }
+      }
+
+      const variant = bySku.get(item.variantSku)
+      if (!variant || variant.productId !== item.productId) {
+        throw new BadRequestException(
+          `Cart line references an unknown variant ${item.variantSku} for ${product.name}`,
+        )
+      }
+      return {
+        productId: item.productId,
+        productName: product.name,
+        variantSku: item.variantSku,
+        unitPrice: variant.price ?? product.price,
+        quantity: item.quantity,
+      }
+    })
   }
 
   /**
@@ -175,11 +252,45 @@ export class OrdersService {
       throw new NotFoundException('One or more products not found')
     }
 
+    // Price each line at its variant (when named), matching checkout exactly.
+    const skus = [...new Set(dto.items.map((i) => i.variantSku).filter((s): s is string => Boolean(s)))]
+    const variants =
+      skus.length > 0
+        ? await this.prisma.productVariant.findMany({
+            where: { sku: { in: skus } },
+            select: { sku: true, productId: true, price: true },
+          })
+        : []
+    const bySku = new Map(variants.map((v) => [v.sku, v]))
+
+    const lines = dto.items.map((item) => {
+      const product = products.find((p) => p.id === item.productId)!
+      if (!item.variantSku) {
+        return {
+          productId: product.id,
+          productName: product.name,
+          variantSku: null as string | null,
+          unitPrice: product.price,
+          quantity: item.quantity,
+        }
+      }
+      const variant = bySku.get(item.variantSku)
+      if (!variant || variant.productId !== item.productId) {
+        throw new NotFoundException(
+          `Variant ${item.variantSku} not found for product ${product.name}`,
+        )
+      }
+      return {
+        productId: product.id,
+        productName: product.name,
+        variantSku: item.variantSku,
+        unitPrice: variant.price ?? product.price,
+        quantity: item.quantity,
+      }
+    })
+
     const subtotal = round2(
-      dto.items.reduce((sum, item) => {
-        const product = products.find((p) => p.id === item.productId)!
-        return sum + product.price * item.quantity
-      }, 0),
+      lines.reduce((sum, line) => sum + line.unitPrice * line.quantity, 0),
     )
 
     return this.prisma.$transaction(async (tx) => {
@@ -191,16 +302,13 @@ export class OrdersService {
           totalPrice: subtotal,
           status: 'PENDING',
           items: {
-            create: dto.items.map((item) => {
-              const product = products.find((p) => p.id === item.productId)!
-              return {
-                productId: product.id,
-                productName: product.name,
-                price: product.price,
-                quantity: item.quantity,
-                variantSku: item.variantSku ?? null,
-              }
-            }),
+            create: lines.map((line) => ({
+              productId: line.productId,
+              productName: line.productName,
+              price: line.unitPrice,
+              quantity: line.quantity,
+              variantSku: line.variantSku,
+            })),
           },
         },
       })
@@ -208,10 +316,11 @@ export class OrdersService {
       const { expiresAt } = await this.inventory.reserveForOrder(tx, {
         orderId: order.id,
         userId,
-        items: dto.items.map<ReservationItem>((item) => ({
-          productId: item.productId,
-          productName: products.find((p) => p.id === item.productId)!.name,
-          quantity: item.quantity,
+        items: lines.map<ReservationItem>((line) => ({
+          productId: line.productId,
+          productName: line.productName,
+          quantity: line.quantity,
+          variantSku: line.variantSku ?? undefined,
         })),
       })
 

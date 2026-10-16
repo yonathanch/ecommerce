@@ -10,6 +10,7 @@ import {
   Request,
   UseGuards,
 } from '@nestjs/common'
+import { ApiTags } from '@nestjs/swagger'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 import { Roles, RolesGuard } from '../auth/roles.guard'
 import { InventoryService } from './inventory.service'
@@ -19,6 +20,7 @@ import {
   LowStockQueryDto,
 } from './dto/inventory.dto'
 
+@ApiTags('inventory')
 @Controller('inventory')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class InventoryController {

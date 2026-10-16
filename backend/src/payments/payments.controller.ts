@@ -9,10 +9,12 @@ import {
   Request,
   UseGuards,
 } from '@nestjs/common'
+import { ApiTags } from '@nestjs/swagger'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 import { PaymentsService } from './payments.service'
 import { CreatePaymentDto } from './dto/create-payment.dto'
 
+@ApiTags('payments')
 @Controller('payments')
 @UseGuards(JwtAuthGuard)
 export class PaymentsController {

@@ -5,7 +5,6 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
   BadgePercent,
-  Bell,
   Boxes,
   ChevronRight,
   LayoutDashboard,
@@ -18,6 +17,7 @@ import {
   ShoppingCart,
   Star,
   Store,
+  Tag,
   Truck,
   Users,
   User,
@@ -38,6 +38,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { NotificationBell } from '@/components/admin/NotificationBell'
+import { CommandPalette } from '@/components/admin/CommandPalette'
 
 /**
  * Admin shell.
@@ -102,6 +104,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
         ],
       },
       { href: '/admin/categories', label: 'Kategori', icon: LayoutGrid },
+      { href: '/admin/brands', label: 'Brand', icon: Tag },
       { href: '/admin/inventory', label: 'Inventori', icon: Boxes },
       { href: '/admin/discounts', label: 'Diskon', icon: BadgePercent },
       { href: '/admin/shipping', label: 'Pengiriman', icon: Truck },
@@ -130,6 +133,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   // Submenu state must be declared with the other hooks, before any early
   // return, otherwise the hook order changes between renders.
   const [toggled, setToggled] = useState<Record<string, boolean>>({})
+  const [paletteOpen, setPaletteOpen] = useState(false)
 
   useEffect(() => {
     if (isLoading) return
@@ -166,6 +170,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     logout()
     router.replace('/login')
   }
+
+  const openPalette = () => setPaletteOpen(true)
 
   return (
     <div className="admin-theme flex min-h-screen w-full bg-white text-neutral-900">
@@ -314,26 +320,32 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </div>
 
           <div className="ml-auto flex items-center gap-1.5">
+            {/* Both open the same palette: a click for the mouse, Ctrl+K for
+                the keyboard. The Ctrl+K listener lives in the palette itself. */}
             <Button
               variant="outline"
+              onClick={openPalette}
               className="hidden h-9 w-56 justify-start gap-2 px-3 text-neutral-500 md:flex"
             >
               <Search className="size-4" />
-              <span className="text-sm">Search…</span>
+              <span className="text-sm">Cari…</span>
               <KbdGroup className="ml-auto">
                 <Kbd>Ctrl</Kbd>
                 <span className="text-[11px] font-medium text-neutral-500">+</span>
                 <Kbd>K</Kbd>
               </KbdGroup>
             </Button>
-            <Button variant="ghost" size="icon" className="relative rounded-full md:hidden">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={openPalette}
+              aria-label="Cari"
+              className="relative rounded-full md:hidden"
+            >
               <Search className="size-5" />
             </Button>
 
-            <Button variant="ghost" size="icon" className="relative rounded-full">
-              <Bell className="size-5" />
-              <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-rose-600 ring-2 ring-white" />
-            </Button>
+            <NotificationBell />
 
             <Button variant="ghost" className="h-9 gap-2 px-1.5">
               <Avatar className="size-7">
@@ -385,6 +397,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
         <main className="min-w-0 flex-1 p-4 md:p-6">{children}</main>
       </div>
+
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
     </div>
   )
 }

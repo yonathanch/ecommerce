@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common'
+import { ApiTags } from '@nestjs/swagger'
 import { ProductsService } from './products.service'
 import {
   CreateProductDto,
@@ -19,6 +20,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 import { RolesGuard, Roles } from '../auth/roles.guard'
 import { Role } from '@prisma/client'
 
+@ApiTags('products')
 @Controller('products')
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}

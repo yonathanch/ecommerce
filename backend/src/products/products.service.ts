@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import { InventoryService } from '../inventory/inventory.service'
+import { ReviewsService } from '../reviews/reviews.service'
 import { slugify } from '../common/slug'
 import {
   CreateProductDto,
@@ -26,6 +27,7 @@ export class ProductsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly inventory: InventoryService,
+    private readonly reviews: ReviewsService,
   ) {}
 
   /**
@@ -141,8 +143,22 @@ export class ProductsService {
     })
     if (!product) throw new NotFoundException('Product not found')
 
-    const reserved = await this.inventory.reservedQuantity(id)
-    return this.present(product, reserved)
+    const [reserved, variantReserved, rating] = await Promise.all([
+      this.inventory.reservedQuantity(id),
+      // Per-SKU holds, so a size that is fully reserved reads "sold out" even
+      // though the product as a whole still has units on the shelf.
+      this.inventory.reservedVariantMap([id]),
+      // The header's stars come from published reviews only, so a product
+      // whose reviews are all still in moderation honestly reads "no rating".
+      this.reviews.ratingSummary(id),
+    ])
+
+    const variants = product.variants.map((variant) => {
+      const held = Math.min(variantReserved.get(`${id}::${variant.sku}`) ?? 0, variant.stock)
+      return { ...variant, reserved: held, available: Math.max(variant.stock - held, 0) }
+    })
+
+    return { ...this.present({ ...product, variants }, reserved), rating }
   }
 
   async create(dto: CreateProductDto) {
@@ -156,7 +172,11 @@ export class ProductsService {
           name: dto.name,
           description: dto.description,
           price: dto.price,
-          stock: dto.stock ?? 0,
+          // A variant product's stock is the sum of its SKUs, so the submitted
+          // product-level number is only honoured for variant-less products.
+          stock: dto.variants?.length
+            ? dto.variants.reduce((sum, v) => sum + (v.stock ?? 0), 0)
+            : dto.stock ?? 0,
           categoryId: category.id,
           brandId: brand?.id ?? null,
           images: dto.imageUrls?.length
@@ -232,13 +252,27 @@ export class ProductsService {
           await this.syncVariants(tx, id, existing.variants.map((v) => v.sku), dto.variants)
         }
 
+        // Once the variant set is settled, a variant product's stock is the sum
+        // of its SKUs — the derived total always wins over the submitted number,
+        // which is only meaningful for a product with no variants at all.
+        const variantCount = await tx.productVariant.count({ where: { productId: id } })
+        const derivedStock =
+          variantCount > 0
+            ? (
+                await tx.productVariant.aggregate({
+                  where: { productId: id },
+                  _sum: { stock: true },
+                })
+              )._sum.stock ?? 0
+            : dto.stock
+
         const updated = await tx.product.update({
           where: { id },
           data: {
             name: dto.name,
             description: dto.description,
             price: dto.price,
-            stock: dto.stock,
+            stock: derivedStock,
             categoryId: category?.id,
             brandId: brand === undefined ? undefined : (brand?.id ?? null),
           },

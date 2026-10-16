@@ -25,6 +25,7 @@ model User {
   inventoryTransactions InventoryTransaction[]
   reservations StockReservation[]
   notifications Notification[]
+  reviews    Review[]
 
   @@map("users")
 }
@@ -63,10 +64,49 @@ model Product {
   cartItems  CartItem[]
   wishlistItems WishlistItem[]
   reservations StockReservation[]
+  reviews    Review[]
 
   @@index([categoryId])
   @@index([brandId])
   @@map("products")
+}
+
+// Customer feedback on a product.
+//
+// Two rules shape this table:
+// 1. Only a customer who actually bought the product may review it, so `orderId`
+//    records which purchase unlocked the row (see ReviewsService.assertPurchased).
+//    A unique (productId, userId) keeps that to one review per product.
+// 2. Moderation is explicit: only PUBLISHED rows are ever public, so the
+//    storefront treats a 1-star complaint and a 5-star ad exactly the same until
+//    an admin has seen them.
+model Review {
+  id        String       @id @default(cuid())
+  productId String
+  userId    String
+  orderId   String?
+  rating    Int
+  title     String?
+  body      String
+  status    ReviewStatus @default(PENDING)
+  reply     String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order   Order?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@unique([productId, userId])
+  @@index([status])
+  @@index([productId, status])
+  @@map("reviews")
+}
+
+enum ReviewStatus {
+  PENDING
+  PUBLISHED
+  REJECTED
 }
 
 // In-house fashion label shown in the "Top Fashion Brands" section. Each brand
@@ -134,17 +174,19 @@ model Cart {
 
   @@index([userId])
   @@map("carts")
-}
-
-model CartItem {
+}model CartItem {
   id        String   @id @default(cuid())
-  cartId    String
+  cartId     String
   productId String
+  // Chosen variant SKU, empty string for the base product. Stored (not NULL) so
+  // the unique key below actually merges two adds of the same line — PostgreSQL
+  // treats NULLs as distinct and would create duplicate rows.
+  variantSku String   @default("")
   quantity  Int      @default(1)
   product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
 
-  @@unique([cartId, productId])
+  @@unique([cartId, productId, variantSku])
   @@index([cartId])
   @@map("cart_items")
 }
@@ -248,6 +290,14 @@ model Order {
   paidAt  DateTime?
   expiresAt DateTime?
 
+  // Fulfilment. Kept on the order instead of a separate Shipment table because
+  // this shop ships one parcel per order: the customer only needs a courier and
+  // a tracking number. `shippedAt` is also what makes the fulfilment funnel in
+  // the dashboard truthful, since it records a fact rather than a status.
+  courier        String?
+  trackingNumber String?
+  shippedAt      DateTime?
+
   user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   address Address?    @relation(fields: [addressId], references: [id], onDelete: SetNull)
   items   OrderItem[]
@@ -255,9 +305,11 @@ model Order {
   inventoryTransactions InventoryTransaction[]
   payments Payment[]
   reservations StockReservation[]
+  reviews    Review[]
 
   @@index([userId])
   @@index([status])
+  @@index([shippedAt])
   @@map("orders")
 }
 
@@ -269,6 +321,10 @@ model StockReservation {
   id         String            @id @default(cuid())
   orderId    String
   productId  String
+  // Variant being held, empty string for a base-product hold. A variant hold
+  // draws from the variant's own stock; a base hold is only legal for products
+  // without variants (their stock is the product row itself).
+  variantSku String            @default("")
   userId     String
   quantity   Int
   status     ReservationStatus @default(ACTIVE)
@@ -282,6 +338,7 @@ model StockReservation {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([productId, status])
+  @@index([productId, variantSku, status])
   @@index([orderId])
   @@index([status, expiresAt])
   @@map("stock_reservations")

@@ -9,9 +9,11 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common'
+import { ApiTags } from '@nestjs/swagger'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 import { WishlistService } from './wishlist.service'
 
+@ApiTags('wishlist')
 @Controller('wishlist')
 @UseGuards(JwtAuthGuard)
 export class WishlistController {

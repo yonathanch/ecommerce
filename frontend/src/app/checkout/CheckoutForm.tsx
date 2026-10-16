@@ -307,9 +307,15 @@ export function CheckoutForm({ onSuccess }: { onSuccess: () => void }) {
           <>
             <div className="space-y-2 mb-4">
               {items.map((item) => (
-                <div key={item.productId} className="flex justify-between">
+                <div key={`${item.productId}:${item.variantSku ?? ''}`} className="flex justify-between">
                   <span>
-                    {item.product?.name ?? item.productId} ×{item.quantity}
+                    {item.product?.name ?? item.productId}
+                    {item.variant && (
+                      <span className="text-gray-500">
+                        {' '}({Object.values(item.variant.options ?? {}).join(', ')})
+                      </span>
+                    )}{' '}
+                    ×{item.quantity}
                   </span>
                   <span className="font-semibold">{item.lineTotal}</span>
                 </div>

@@ -38,7 +38,7 @@ async function req(method, path, { body, token } = {}) {
 }
 
 async function makeUser(tag) {
-  const email = `m4-${tag}-${Date.now()}@example.com`
+  const email = `m4-${tag}-${Date.now()}-${seq++}@example.com`
   const res = await req('POST', '/auth/signup', {
     body: { email, password: 'Pass1234', name: `M4 ${tag}` },
   })
@@ -46,12 +46,34 @@ async function makeUser(tag) {
   return { email, token: res.data.accessToken, id: res.data.id }
 }
 
+async function signIn(email, password) {
+  const res = await req('POST', '/auth/login', { body: { email, password } })
+  if (res.status !== 200) throw new Error(`login failed for ${email}: ${res.status}`)
+  return res.data.accessToken
+}
+
+let seq = 0
+
 async function main() {
   const health = await req('GET', '/health')
   if (health.status !== 200) throw new Error('backend not healthy — start it first')
 
   const jwt = await makeUser('cart')
   const other = await makeUser('other')
+  const admin = await signIn('admin@example.com', 'admin123')
+
+  // The seed catalog's products all carry variants, so a cart line has to name
+  // a SKU. This suite is about cart/coupon mechanics, so it creates its own
+  // variant-less fixtures to keep the price math exact and independent of what
+  // happens to be seeded — same approach as the M5 suite.
+  const createProduct = async (name, price, stock) => {
+    const res = await req('POST', '/products', {
+      token: admin,
+      body: { name, description: 'm4 fixture', price, stock, category: 'Baju Pria' },
+    })
+    if (res.status !== 201) throw new Error(`create product failed ${res.status} ${JSON.stringify(res.data)}`)
+    return res.data
+  }
 
   // ---------------------------------------------------------------- auth guard
   console.log('\nauth guard')
@@ -60,17 +82,9 @@ async function main() {
   check('POST /coupons/validate without token -> 401', (await req('POST', '/coupons/validate', { body: { code: 'SUMMER20', subtotal: 1 } })).status === 401)
 
   // ---------------------------------------------------------------- fixtures
-  const list = await req('GET', '/products?limit=50')
-  const products = (list.data.items ?? []).filter((p) => p.stock >= 5)
-  if (products.length < 2) throw new Error('need two products with stock >= 5')
-  // p1 must clear the coupon's minimum purchase, so use the priciest product
-  // and the cheapest second one to keep the numeric expectations small.
-  const byPrice = [...products].sort((a, b) => b.price - a.price)
-  const p1 = byPrice[0]
-  const p2 = byPrice[byPrice.length - 1]
-  if (p1.id === p2.id) throw new Error('need two distinct products')
-  // Mirrors the seeded SUMMER20 coupon (20%, min purchase 200000, cap 100000).
-  if (p1.price < 200000) throw new Error('no product clears the SUMMER20 minPurchase of 200000')
+  // Priced above the SUMMER20 minimum purchase (200000) so the coupon can apply.
+  const p1 = await createProduct(`M4 Premium ${Date.now()}`, 320000, 50)
+  const p2 = await createProduct(`M4 Basics ${Date.now()}`, 79000, 149)
   console.log(`\nfixtures: ${p1.name} (${p1.price}, stock ${p1.stock}) / ${p2.name} (${p2.price}, stock ${p2.stock})`)
 
   // ---------------------------------------------------------------- empty cart
@@ -150,6 +164,48 @@ async function main() {
   res = await req('GET', '/cart', { token: jwt.token })
   check('cart empty after clear', res.data.totalItems === 0 && res.data.cart.length === 0, JSON.stringify(res.data))
 
+  // ------------------------------------------------- variant lines (M10)
+  // A product with variants must be carted by SKU: that SKU's stock and price
+  // are what the line holds, so an unattributed line would take from a phantom
+  // pool. The seed catalog is full of these, so the rule has to hold.
+  console.log('\ncart: variant lines')
+  const variantRes = await req('POST', '/products', {
+    token: admin,
+    body: {
+      name: `M4 Varian ${Date.now()}`,
+      description: 'm4 variant fixture',
+      price: 100000,
+      stock: 0, // ignored: stock comes from the variants below
+      category: 'Baju Pria',
+      variants: [
+        { sku: `M4-V-RED-M-${Date.now()}`, options: { Warna: 'Merah', Ukuran: 'M' }, price: 110000, stock: 3 },
+        { sku: `M4-V-RED-L-${Date.now()}`, options: { Warna: 'Merah', Ukuran: 'L' }, stock: 2 },
+      ],
+    },
+  })
+  const variantProduct = variantRes.data
+  const skuRedM = variantProduct.variants.find((v) => v.options.Ukuran === 'M').sku
+  const skuRedL = variantProduct.variants.find((v) => v.options.Ukuran === 'L').sku
+  check('variant fixture stock = sum of SKUs', variantProduct.stock === 5, `${variantProduct.stock}`)
+
+  res = await req('POST', '/cart/items', { token: jwt.token, body: { productId: variantProduct.id, quantity: 1 } })
+  check('variant product without a SKU -> 400', res.status === 400, `${res.status} ${JSON.stringify(res.data)}`)
+
+  res = await req('POST', '/cart/items', { token: jwt.token, body: { productId: variantProduct.id, quantity: 1, variantSku: skuRedM } })
+  check('adding a variant SKU -> 201', res.status === 201, `${res.status} ${JSON.stringify(res.data)}`)
+  check('line prices at the variant price', res.data?.cart?.find((i) => i.variantSku === skuRedM)?.unitPrice === 110000, JSON.stringify(res.data?.cart?.find((i) => i.variantSku === skuRedM)))
+
+  res = await req('POST', '/cart/items', { token: jwt.token, body: { productId: variantProduct.id, quantity: 1, variantSku: skuRedM } })
+  check('same SKU merges into one line', res.data?.item?.quantity === 2, JSON.stringify(res.data?.item))
+
+  res = await req('POST', '/cart/items', { token: jwt.token, body: { productId: variantProduct.id, quantity: 1, variantSku: skuRedL } })
+  check('a second SKU is its own line', res.data?.cart?.filter((i) => i.productId === variantProduct.id).length === 2, JSON.stringify(res.data?.cart?.map((i) => i.variantSku)))
+
+  res = await req('POST', '/cart/items', { token: jwt.token, body: { productId: variantProduct.id, quantity: 99, variantSku: skuRedL } })
+  check('over-stock on one SKU -> 400', res.status === 400, `${res.status} ${JSON.stringify(res.data)}`)
+
+  await req('POST', '/cart/clear', { token: jwt.token })
+
   // ---------------------------------------------------------------- wishlist
   console.log('\nwishlist')
   res = await req('GET', '/wishlist', { token: jwt.token })
@@ -197,6 +253,13 @@ async function main() {
 
   res = await req('POST', '/coupons/validate', { token: jwt.token, body: { code: 'NOPE', subtotal } })
   check('unknown code -> 404', res.status === 404, `${res.status}`)
+
+  // Keep the demo catalog free of test fixtures: drop what this run created.
+  console.log('\ncleanup: removing fixtures from the catalog')
+  for (const [label, id] of [['p1', p1.id], ['p2', p2.id], ['variant', variantProduct.id]]) {
+    const del = await req('DELETE', `/products/${id}`, { token: admin })
+    check(`fixture ${label} removed`, del.status === 200, `${del.status}`)
+  }
 
   console.log(`\n${failed === 0 ? 'PASS' : 'FAIL'} — ${passed} passed, ${failed} failed`)
   process.exit(failed === 0 ? 0 : 1)

@@ -13,6 +13,12 @@ export interface ReservationItem {
   productId: string
   productName: string
   quantity: number
+  /**
+   * Chosen variant SKU. When present the hold draws from that variant's own
+   * stock; when absent it is a base-product hold, which is only legal for
+   * products that have no variants at all.
+   */
+  variantSku?: string
 }
 
 export interface LedgerMovement {
@@ -37,17 +43,27 @@ const DEFAULT_TTL_MINUTES = 30
 /**
  * Inventory is the only module allowed to move stock.
  *
+ * Stock comes in two shapes:
+ * - A product *without* variants carries its own `Product.stock`. This is the
+ *   simple case: holds, deductions and availability all read that one column.
+ * - A product *with* variants derives its `Product.stock` from the sum of its
+ *   variants' stock. Every variant movement mirrors onto the product row so the
+ *   catalog-level number stays correct, but the variant column is the single
+ *   source of truth. A hold on such a product must name a variant.
+ *
  * Two separate histories, deliberately:
  * - `stock_reservations` records the *hold* lifecycle of an unpaid order
- *   (ACTIVE -> CONSUMED | RELEASED). A hold never changes `Product.stock`, it
- *   only lowers availability, so a checkout cannot destroy sellable inventory.
+ *   (ACTIVE -> CONSUMED | RELEASED). A hold never changes stock, it only lowers
+ *   availability, so a checkout cannot destroy sellable inventory.
  * - `inventory_transactions` is the on-hand ledger (DEDUCT / RESTOCK / ADJUST);
  *   every row is a real change of the physical quantity with before/after.
  *
  * Concurrency: every path that reads availability takes a row lock on the
- * product (`SELECT ... FOR UPDATE`) inside the caller's transaction, which
- * serializes concurrent checkouts of the same product. Products are locked in
- * a stable (sorted) order so two multi-item checkouts cannot deadlock.
+ * product (`SELECT ... FOR UPDATE`) inside the caller's transaction, and a
+ * variant hold locks its variant row too, which serializes concurrent checkouts
+ * of the same product/variant. Products are locked in a stable (sorted) order
+ * and a variant is always locked after its product, so two multi-item checkouts
+ * cannot deadlock.
  */
 @Injectable()
 export class InventoryService {
@@ -73,10 +89,32 @@ export class InventoryService {
 
   // ------------------------------------------------------------------ reads
 
-  /** Reserved (held) units for one product. Expired holds do not count. */
+  /**
+   * Held units for one product across all of its variants (and any base
+   * hold). Expired holds do not count. This is what the catalog-level
+   * availability display needs.
+   */
   async reservedQuantity(productId: string, db: Db = this.prisma): Promise<number> {
     const result = await db.stockReservation.aggregate({
       where: { productId, status: 'ACTIVE', expiresAt: { gt: new Date() } },
+      _sum: { quantity: true },
+    })
+    return result._sum.quantity ?? 0
+  }
+
+  /** Held units for one specific variant of a product. */
+  async reservedVariantQuantity(
+    productId: string,
+    variantSku: string,
+    db: Db = this.prisma,
+  ): Promise<number> {
+    const result = await db.stockReservation.aggregate({
+      where: {
+        productId,
+        variantSku,
+        status: 'ACTIVE',
+        expiresAt: { gt: new Date() },
+      },
       _sum: { quantity: true },
     })
     return result._sum.quantity ?? 0
@@ -99,6 +137,32 @@ export class InventoryService {
     return new Map(rows.map((row) => [row.productId, row._sum.quantity ?? 0]))
   }
 
+  /** Reserved units grouped by "productId::variantSku", for the product page. */
+  async reservedVariantMap(
+    productIds: string[],
+    db: Db = this.prisma,
+  ): Promise<Map<string, number>> {
+    if (productIds.length === 0) return new Map()
+
+    const rows = await db.stockReservation.groupBy({
+      by: ['productId', 'variantSku'],
+      where: {
+        productId: { in: productIds },
+        variantSku: { not: '' },
+        status: 'ACTIVE',
+        expiresAt: { gt: new Date() },
+      },
+      _sum: { quantity: true },
+    })
+
+    return new Map(
+      rows.map((row) => [
+        `${row.productId}::${row.variantSku}`,
+        row._sum.quantity ?? 0,
+      ]),
+    )
+  }
+
   async availability(productId: string, db: Db = this.prisma) {
     const product = await db.product.findUnique({
       where: { id: productId },
@@ -113,6 +177,28 @@ export class InventoryService {
       stock: product.stock,
       reserved,
       available: Math.max(product.stock - reserved, 0),
+    }
+  }
+
+  /** Availability for one variant: its own stock minus holds on that SKU. */
+  async variantAvailability(
+    productId: string,
+    variantSku: string,
+    db: Db = this.prisma,
+  ) {
+    const variant = await db.productVariant.findFirst({
+      where: { productId, sku: variantSku },
+      select: { sku: true, stock: true },
+    })
+    if (!variant) throw new NotFoundException('Variant not found for this product')
+
+    const reserved = await this.reservedVariantQuantity(productId, variantSku, db)
+    return {
+      productId,
+      variantSku: variant.sku,
+      stock: variant.stock,
+      reserved,
+      available: Math.max(variant.stock - reserved, 0),
     }
   }
 
@@ -165,6 +251,26 @@ export class InventoryService {
     return rows[0]
   }
 
+  /**
+   * Locks a variant row (after its product is already locked) and returns its
+   * on-hand stock, verifying it belongs to the expected product.
+   */
+  private async lockVariant(
+    tx: Prisma.TransactionClient,
+    productId: string,
+    variantSku: string,
+  ) {
+    const rows = await tx.$queryRaw<{ id: string; stock: number }[]>`
+      SELECT "id", "stock" FROM "product_variants"
+      WHERE "sku" = ${variantSku} AND "productId" = ${productId}
+      FOR UPDATE
+    `
+    if (rows.length === 0) {
+      throw new NotFoundException('Variant not found for this product')
+    }
+    return rows[0]
+  }
+
   /** Expired holds on these products stop counting against availability. */
   private async releaseExpiredFor(
     tx: Prisma.TransactionClient,
@@ -191,8 +297,12 @@ export class InventoryService {
     tx: Prisma.TransactionClient,
     input: { orderId: string; userId: string; items: ReservationItem[] },
   ) {
-    // Stable lock order across concurrent checkouts.
-    const items = [...input.items].sort((a, b) => a.productId.localeCompare(b.productId))
+    // Stable lock order across concurrent checkouts: product, then variant.
+    const items = [...input.items].sort(
+      (a, b) =>
+        a.productId.localeCompare(b.productId) ||
+        (a.variantSku ?? '').localeCompare(b.variantSku ?? ''),
+    )
     const expiresAt = new Date(Date.now() + this.ttlMinutes * 60_000)
 
     await this.releaseExpiredFor(
@@ -200,10 +310,64 @@ export class InventoryService {
       items.map((i) => i.productId),
     )
 
-    const reservations: { productId: string; quantity: number; available: number }[] = []
+    const reservations: {
+      productId: string
+      variantSku?: string
+      quantity: number
+      available: number
+    }[] = []
 
     for (const item of items) {
       const product = await this.lockProduct(tx, item.productId)
+
+      if (item.variantSku) {
+        const variant = await this.lockVariant(tx, item.productId, item.variantSku)
+        const held = await this.reservedVariantQuantity(
+          item.productId,
+          item.variantSku,
+          tx,
+        )
+        const available = Math.max(variant.stock - held, 0)
+
+        if (item.quantity > available) {
+          throw new BadRequestException(
+            `Insufficient available stock for ${item.productName} (${item.variantSku}). Available: ${available}`,
+          )
+        }
+
+        await tx.stockReservation.create({
+          data: {
+            orderId: input.orderId,
+            productId: item.productId,
+            variantSku: item.variantSku,
+            userId: input.userId,
+            quantity: item.quantity,
+            status: 'ACTIVE',
+            expiresAt,
+          },
+        })
+
+        reservations.push({
+          productId: item.productId,
+          variantSku: item.variantSku,
+          quantity: item.quantity,
+          available: available - item.quantity,
+        })
+        continue
+      }
+
+      // Base-product hold. Once a product has variants its stock is the sum of
+      // them, so an unattributed hold would take from a phantom pool — the
+      // buyer has to name a variant instead.
+      const variantCount = await tx.productVariant.count({
+        where: { productId: item.productId },
+      })
+      if (variantCount > 0) {
+        throw new BadRequestException(
+          `${item.productName} has variants — choose one before checkout`,
+        )
+      }
+
       const held = await this.reservedQuantity(item.productId, tx)
       const available = Math.max(product.stock - held, 0)
 
@@ -217,6 +381,7 @@ export class InventoryService {
         data: {
           orderId: input.orderId,
           productId: item.productId,
+          variantSku: '',
           userId: input.userId,
           quantity: item.quantity,
           status: 'ACTIVE',
@@ -244,7 +409,7 @@ export class InventoryService {
   ) {
     const holds = await tx.stockReservation.findMany({
       where: { orderId, status: 'ACTIVE' },
-      orderBy: { productId: 'asc' },
+      orderBy: [{ productId: 'asc' }, { variantSku: 'asc' }],
     })
     if (holds.length === 0) {
       throw new BadRequestException('This order has no active stock reservation')
@@ -253,39 +418,94 @@ export class InventoryService {
     const movements: LedgerMovement[] = []
 
     for (const hold of holds) {
-      const rows = await tx.$queryRaw<{ stock: number }[]>`
-        UPDATE "products"
-        SET "stock" = "stock" - ${hold.quantity}, "updatedAt" = now()
-        WHERE "id" = ${hold.productId} AND "stock" >= ${hold.quantity}
-        RETURNING "stock"
-      `
-
-      if (rows.length === 0) {
-        const current = await tx.product.findUnique({
-          where: { id: hold.productId },
-          select: { name: true, stock: true },
-        })
-        throw new BadRequestException(
-          `Stock for ${current?.name ?? hold.productId} is no longer sufficient (available: ${current?.stock ?? 0})`,
-        )
+      if (hold.variantSku) {
+        movements.push(await this.consumeVariant(tx, hold))
+        continue
       }
-
-      await tx.stockReservation.update({
-        where: { id: hold.id },
-        data: { status: 'CONSUMED', consumedAt: new Date() },
-      })
-
-      movements.push({
-        productId: hold.productId,
-        quantity: hold.quantity,
-        stockBefore: rows[0].stock + hold.quantity,
-        stockAfter: rows[0].stock,
-      })
+      movements.push(await this.consumeProduct(tx, hold))
     }
 
     await this.writeLedger(tx, movements, { type: 'DEDUCT', userId, orderId, reason })
 
     return movements
+  }
+
+  /** Deduct a single variant's stock, mirroring onto the product-level sum. */
+  private async consumeVariant(
+    tx: Prisma.TransactionClient,
+    hold: { id: string; productId: string; variantSku: string; quantity: number },
+  ): Promise<LedgerMovement> {
+    const variantRows = await tx.$queryRaw<{ stock: number }[]>`
+      UPDATE "product_variants"
+      SET "stock" = "stock" - ${hold.quantity}, "updatedAt" = now()
+      WHERE "sku" = ${hold.variantSku} AND "productId" = ${hold.productId} AND "stock" >= ${hold.quantity}
+      RETURNING "stock"
+    `
+
+    if (variantRows.length === 0) {
+      const variant = await tx.productVariant.findFirst({
+        where: { productId: hold.productId, sku: hold.variantSku },
+        select: { stock: true },
+      })
+      throw new BadRequestException(
+        `Stock for variant ${hold.variantSku} is no longer sufficient (available: ${variant?.stock ?? 0})`,
+      )
+    }
+
+    // Keep the derived product-level total in step with the variant we just sold.
+    await tx.$queryRaw`
+      UPDATE "products"
+      SET "stock" = "stock" - ${hold.quantity}, "updatedAt" = now()
+      WHERE "id" = ${hold.productId}
+    `
+
+    await tx.stockReservation.update({
+      where: { id: hold.id },
+      data: { status: 'CONSUMED', consumedAt: new Date() },
+    })
+
+    return {
+      productId: hold.productId,
+      variantSku: hold.variantSku,
+      quantity: hold.quantity,
+      stockBefore: variantRows[0].stock + hold.quantity,
+      stockAfter: variantRows[0].stock,
+    }
+  }
+
+  /** Deduct a base-product's stock (only used for products with no variants). */
+  private async consumeProduct(
+    tx: Prisma.TransactionClient,
+    hold: { id: string; productId: string; quantity: number },
+  ): Promise<LedgerMovement> {
+    const rows = await tx.$queryRaw<{ stock: number }[]>`
+      UPDATE "products"
+      SET "stock" = "stock" - ${hold.quantity}, "updatedAt" = now()
+      WHERE "id" = ${hold.productId} AND "stock" >= ${hold.quantity}
+      RETURNING "stock"
+    `
+
+    if (rows.length === 0) {
+      const current = await tx.product.findUnique({
+        where: { id: hold.productId },
+        select: { name: true, stock: true },
+      })
+      throw new BadRequestException(
+        `Stock for ${current?.name ?? hold.productId} is no longer sufficient (available: ${current?.stock ?? 0})`,
+      )
+    }
+
+    await tx.stockReservation.update({
+      where: { id: hold.id },
+      data: { status: 'CONSUMED', consumedAt: new Date() },
+    })
+
+    return {
+      productId: hold.productId,
+      quantity: hold.quantity,
+      stockBefore: rows[0].stock + hold.quantity,
+      stockAfter: rows[0].stock,
+    }
   }
 
   /**
@@ -299,8 +519,8 @@ export class InventoryService {
   ) {
     const items = await tx.orderItem.findMany({
       where: { orderId },
-      select: { productId: true, quantity: true },
-      orderBy: { productId: 'asc' },
+      select: { productId: true, variantSku: true, quantity: true },
+      orderBy: [{ productId: 'asc' }, { variantSku: 'asc' }],
     })
     if (items.length === 0) {
       throw new BadRequestException('This order has no items to restock')
@@ -309,29 +529,73 @@ export class InventoryService {
     const movements: LedgerMovement[] = []
 
     for (const item of items) {
-      const rows = await tx.$queryRaw<{ stock: number }[]>`
-        UPDATE "products"
-        SET "stock" = "stock" + ${item.quantity}, "updatedAt" = now()
-        WHERE "id" = ${item.productId}
-        RETURNING "stock"
-      `
-      if (rows.length === 0) {
-        // Catalog entry was deleted since purchase: skip its ledger row instead
-        // of failing the whole refund.
+      if (item.variantSku) {
+        const movement = await this.restockVariant(tx, item)
+        if (movement) movements.push(movement)
         continue
       }
-
-      movements.push({
-        productId: item.productId,
-        quantity: item.quantity,
-        stockBefore: rows[0].stock - item.quantity,
-        stockAfter: rows[0].stock,
-      })
+      const movement = await this.restockProduct(tx, item)
+      if (movement) movements.push(movement)
     }
 
     await this.writeLedger(tx, movements, { type: 'RESTOCK', userId, orderId, reason })
 
     return movements
+  }
+
+  /** Return units to a variant, mirroring onto the product-level sum. */
+  private async restockVariant(
+    tx: Prisma.TransactionClient,
+    item: { productId: string; variantSku: string; quantity: number },
+  ): Promise<LedgerMovement | null> {
+    const rows = await tx.$queryRaw<{ stock: number }[]>`
+      UPDATE "product_variants"
+      SET "stock" = "stock" + ${item.quantity}, "updatedAt" = now()
+      WHERE "sku" = ${item.variantSku} AND "productId" = ${item.productId}
+      RETURNING "stock"
+    `
+    // Variant was deleted since the purchase: nothing to put back, so skip it
+    // rather than failing the whole refund (same policy as a deleted product).
+    if (rows.length === 0) return null
+
+    await tx.$queryRaw`
+      UPDATE "products"
+      SET "stock" = "stock" + ${item.quantity}, "updatedAt" = now()
+      WHERE "id" = ${item.productId}
+    `
+
+    return {
+      productId: item.productId,
+      variantSku: item.variantSku,
+      quantity: item.quantity,
+      stockBefore: rows[0].stock - item.quantity,
+      stockAfter: rows[0].stock,
+    }
+  }
+
+  /** Return units to a base-product's stock. */
+  private async restockProduct(
+    tx: Prisma.TransactionClient,
+    item: { productId: string; quantity: number },
+  ): Promise<LedgerMovement | null> {
+    const rows = await tx.$queryRaw<{ stock: number }[]>`
+      UPDATE "products"
+      SET "stock" = "stock" + ${item.quantity}, "updatedAt" = now()
+      WHERE "id" = ${item.productId}
+      RETURNING "stock"
+    `
+    if (rows.length === 0) {
+      // Catalog entry was deleted since purchase: skip its ledger row instead
+      // of failing the whole refund.
+      return null
+    }
+
+    return {
+      productId: item.productId,
+      quantity: item.quantity,
+      stockBefore: rows[0].stock - item.quantity,
+      stockAfter: rows[0].stock,
+    }
   }
 
   /** Order cancelled or expired: drop the holds (on-hand stock was never touched). */
@@ -378,6 +642,10 @@ export class InventoryService {
   /**
    * Manual stock correction (admin). `delta` is signed; stock can never go
    * below zero, which the conditional UPDATE enforces atomically.
+   *
+   * On a product with variants, only a variant-level correction is allowed —
+   * the product row is the derived sum, so touching it directly would silently
+   * drift out of step with the SKUs that actually make it up.
    */
   async adjust(input: {
     productId: string
@@ -391,78 +659,113 @@ export class InventoryService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      if (input.variantSku) {
-        const variant = await tx.productVariant.findUnique({
-          where: { sku: input.variantSku },
-          select: { id: true, productId: true, stock: true },
-        })
-        if (!variant || variant.productId !== input.productId) {
-          throw new NotFoundException('Variant not found for this product')
-        }
-        if (variant.stock + input.delta < 0) {
-          throw new BadRequestException(
-            `Adjustment would make variant stock negative (current: ${variant.stock})`,
-          )
-        }
-
-        const updated = await tx.productVariant.update({
-          where: { id: variant.id },
-          data: { stock: variant.stock + input.delta },
-          select: { stock: true },
-        })
-
-        await this.writeLedger(
-          tx,
-          [
-            {
-              productId: input.productId,
-              variantSku: input.variantSku,
-              quantity: Math.abs(input.delta),
-              stockBefore: variant.stock,
-              stockAfter: updated.stock,
-            },
-          ],
-          { type: 'ADJUST', userId: input.userId, reason: input.reason },
-        )
-
-        return { productId: input.productId, variantSku: input.variantSku, stock: updated.stock }
+      const variantSku = input.variantSku
+      if (variantSku) {
+        return this.adjustVariant(tx, { ...input, variantSku })
       }
 
-      const rows = await tx.$queryRaw<{ name: string; stock: number }[]>`
-        UPDATE "products"
-        SET "stock" = "stock" + ${input.delta}, "updatedAt" = now()
-        WHERE "id" = ${input.productId} AND "stock" + ${input.delta} >= 0
-        RETURNING "name", "stock"
-      `
-
-      if (rows.length === 0) {
-        const current = await tx.product.findUnique({
-          where: { id: input.productId },
-          select: { stock: true },
-        })
-        if (!current) throw new NotFoundException('Product not found')
+      // A product-level adjustment on a variant product would desync the derived
+      // total, so it is rejected in favour of adjusting a specific SKU.
+      const variantCount = await tx.productVariant.count({
+        where: { productId: input.productId },
+      })
+      if (variantCount > 0) {
         throw new BadRequestException(
-          `Adjustment would make stock negative (current: ${current.stock})`,
+          'This product has variants — adjust a specific variant SKU instead',
         )
       }
 
-      await this.writeLedger(
-        tx,
-        [
-          {
-            productId: input.productId,
-            quantity: Math.abs(input.delta),
-            stockBefore: rows[0].stock - input.delta,
-            stockAfter: rows[0].stock,
-          },
-        ],
-        { type: 'ADJUST', userId: input.userId, reason: input.reason },
-      )
-
-      await this.alertIfLowStock(tx, [input.productId])
-
-      return { productId: input.productId, stock: rows[0].stock }
+      return this.adjustProduct(tx, input)
     })
+  }
+
+  private async adjustVariant(
+    tx: Prisma.TransactionClient,
+    input: { productId: string; variantSku: string; delta: number; reason: string; userId: string },
+  ) {
+    const variant = await tx.productVariant.findFirst({
+      where: { productId: input.productId, sku: input.variantSku },
+      select: { id: true, productId: true, stock: true },
+    })
+    if (!variant) {
+      throw new NotFoundException('Variant not found for this product')
+    }
+    if (variant.stock + input.delta < 0) {
+      throw new BadRequestException(
+        `Adjustment would make variant stock negative (current: ${variant.stock})`,
+      )
+    }
+
+    const updated = await tx.productVariant.update({
+      where: { id: variant.id },
+      data: { stock: variant.stock + input.delta },
+      select: { stock: true },
+    })
+
+    // Keep the derived product-level total in step with the variant.
+    await tx.$queryRaw`
+      UPDATE "products"
+      SET "stock" = "stock" + ${input.delta}, "updatedAt" = now()
+      WHERE "id" = ${input.productId} AND "stock" + ${input.delta} >= 0
+    `
+
+    await this.writeLedger(
+      tx,
+      [
+        {
+          productId: input.productId,
+          variantSku: input.variantSku,
+          quantity: Math.abs(input.delta),
+          stockBefore: variant.stock,
+          stockAfter: updated.stock,
+        },
+      ],
+      { type: 'ADJUST', userId: input.userId, reason: input.reason },
+    )
+
+    await this.alertIfLowStock(tx, [input.productId])
+
+    return { productId: input.productId, variantSku: input.variantSku, stock: updated.stock }
+  }
+
+  private async adjustProduct(
+    tx: Prisma.TransactionClient,
+    input: { productId: string; delta: number; reason: string; userId: string },
+  ) {
+    const rows = await tx.$queryRaw<{ name: string; stock: number }[]>`
+      UPDATE "products"
+      SET "stock" = "stock" + ${input.delta}, "updatedAt" = now()
+      WHERE "id" = ${input.productId} AND "stock" + ${input.delta} >= 0
+      RETURNING "name", "stock"
+    `
+
+    if (rows.length === 0) {
+      const current = await tx.product.findUnique({
+        where: { id: input.productId },
+        select: { stock: true },
+      })
+      if (!current) throw new NotFoundException('Product not found')
+      throw new BadRequestException(
+        `Adjustment would make stock negative (current: ${current.stock})`,
+      )
+    }
+
+    await this.writeLedger(
+      tx,
+      [
+        {
+          productId: input.productId,
+          quantity: Math.abs(input.delta),
+          stockBefore: rows[0].stock - input.delta,
+          stockAfter: rows[0].stock,
+        },
+      ],
+      { type: 'ADJUST', userId: input.userId, reason: input.reason },
+    )
+
+    await this.alertIfLowStock(tx, [input.productId])
+
+    return { productId: input.productId, stock: rows[0].stock }
   }
 
   /** Creates admin notifications for products that dropped to/below threshold. */

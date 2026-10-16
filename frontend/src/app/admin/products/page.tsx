@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
   ChevronLeft,
@@ -172,6 +172,21 @@ export default function AdminProductsPage() {
       setFormOpen(true)
     }
   }, [])
+
+  // The palette, the stock bell and a low-stock alert all deep-link here with
+  // ?focus=<id>. The form opens on the loaded row, so the admin lands on the
+  // product itself rather than on a list they must search again.
+  const focusApplied = useRef(false)
+  useEffect(() => {
+    if (focusApplied.current || products.length === 0) return
+    const focus = new URLSearchParams(window.location.search).get('focus')
+    if (!focus) return
+    const product = products.find((item) => item.id === focus)
+    if (!product) return
+    focusApplied.current = true
+    startEdit(product)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products])
 
   const reset = () => {
     setForm(EMPTY_FORM)
@@ -453,7 +468,11 @@ export default function AdminProductsPage() {
               </select>
               <span className="mt-1 block text-xs text-neutral-500">
                 Tampil di bagian Top Fashion Brands dan halaman{' '}
-                <span className="font-mono">/brands/&lt;slug&gt;</span>.
+                <span className="font-mono">/brands/&lt;slug&gt;</span>. Brand dikelola di menu{' '}
+                <Link href="/admin/brands" className="underline underline-offset-2 hover:text-neutral-900">
+                  Brand
+                </Link>
+                .
               </span>
             </label>
             <label className="text-sm">
@@ -636,7 +655,7 @@ export default function AdminProductsPage() {
             <button
               type="submit"
               disabled={busy}
-              className="h-9 rounded-lg neutral-900 px-3 text-sm font-medium text-white transition hover:neutral-900/80 disabled:opacity-50"
+              className="h-9 rounded-lg bg-neutral-900 px-3 text-sm font-medium text-white transition hover:bg-neutral-900/80 disabled:opacity-50"
             >
               {editingId ? 'Simpan perubahan' : 'Tambah produk'}
             </button>
@@ -695,4 +714,178 @@ export default function AdminProductsPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-n
+                  <td colSpan={7} className="px-4 py-8 text-center text-neutral-500">
+                    Memuat…
+                  </td>
+                </tr>
+              ) : rows.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-8 text-center text-neutral-500">
+                    Tidak ada produk yang cocok.
+                  </td>
+                </tr>
+              ) : (
+                rows.map((product) => {
+                  const status = stockStatus(product)
+                  const image = product.images?.find((i) => i?.url)?.url
+                  return (
+                    <tr
+                      key={product.id}
+                      className="border-b border-neutral-100 transition-colors last:border-0 hover:bg-neutral-100/50"
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          {image ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={image}
+                              alt={product.name}
+                              className="h-10 w-10 shrink-0 rounded-md border border-neutral-200 object-cover"
+                            />
+                          ) : (
+                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-neutral-50 text-neutral-400">
+                              <Package className="h-4 w-4" />
+                            </span>
+                          )}
+                          <div className="min-w-0">
+                            <Link
+                              href={`/products/${product.id}`}
+                              className="font-medium text-neutral-900 transition hover:text-neutral-900"
+                            >
+                              {product.name}
+                            </Link>
+                            <p className="text-xs text-neutral-500">
+                              {product.brand ? `${product.brand.name} · ` : ''}
+                              {product.variants?.length ?? 0} SKU · {product.id.slice(0, 8)}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="inline-flex rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-600">
+                          {product.category}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums text-neutral-700">
+                        {formatRupiah(product.price)}
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums text-neutral-700">{product.stock}</td>
+                      <td className="px-4 py-3 text-right tabular-nums text-neutral-700">
+                        {product.available}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <StatusPill tone={status.tone}>{status.label}</StatusPill>
+                      </td>
+                      <td className="relative px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          aria-label="Aksi produk"
+                          onClick={() => setOpenMenu(openMenu === product.id ? null : product.id)}
+                          className="rounded-lg p-1.5 text-neutral-500 transition hover:bg-neutral-100"
+                        >
+                          <MoreVertical className="h-4 w-4" />
+                        </button>
+                        {openMenu === product.id && (
+                          <div className="absolute right-4 top-11 z-20 w-40 overflow-hidden rounded-lg border border-neutral-200 bg-white py-1 text-left shadow-lg">
+                            <Link
+                              href={`/products/${product.id}`}
+                              className="flex items-center gap-2 px-3 py-2 text-sm text-neutral-700 transition hover:bg-neutral-50"
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                              Lihat
+                            </Link>
+                            <button
+                              type="button"
+                              onClick={() => startEdit(product)}
+                              className="flex w-full items-center gap-2 px-3 py-2 text-sm text-neutral-700 transition hover:bg-neutral-50"
+                            >
+                              <Pencil className="h-4 w-4" />
+                              Ubah
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void remove(product)}
+                              className="flex w-full items-center gap-2 px-3 py-2 text-sm text-rose-600 transition hover:bg-rose-50"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              Hapus
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* ----------------------------------------------------- pagination */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 px-4 py-3 text-sm text-neutral-600">
+          <span>{filtered.length} produk</span>
+          <div className="flex flex-wrap items-center gap-4">
+            <label className="flex items-center gap-2">
+              Baris per halaman
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value))
+                  setPage(1)
+                }}
+                className="rounded-lg border border-neutral-200 bg-white px-2 py-1 outline-none focus:border-neutral-400"
+              >
+                {[8, 16, 24].map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span>
+              Halaman {safePage} dari {totalPages}
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label="Halaman pertama"
+                onClick={() => setPage(1)}
+                disabled={safePage <= 1}
+                className="rounded-lg border border-neutral-200 p-1.5 transition hover:bg-neutral-50 disabled:opacity-40"
+              >
+                <ChevronsLeft className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                aria-label="Halaman sebelumnya"
+                onClick={() => setPage(Math.max(1, safePage - 1))}
+                disabled={safePage <= 1}
+                className="rounded-lg border border-neutral-200 p-1.5 transition hover:bg-neutral-50 disabled:opacity-40"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                aria-label="Halaman berikutnya"
+                onClick={() => setPage(Math.min(totalPages, safePage + 1))}
+                disabled={safePage >= totalPages}
+                className="rounded-lg border border-neutral-200 p-1.5 transition hover:bg-neutral-50 disabled:opacity-40"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                aria-label="Halaman terakhir"
+                onClick={() => setPage(totalPages)}
+                disabled={safePage >= totalPages}
+                className="rounded-lg border border-neutral-200 p-1.5 transition hover:bg-neutral-50 disabled:opacity-40"
+              >
+                <ChevronsRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </Panel>
+    </div>
+  )
+}

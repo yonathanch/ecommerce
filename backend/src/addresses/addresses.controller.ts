@@ -11,10 +11,12 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common'
+import { ApiTags } from '@nestjs/swagger'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 import { AddressesService } from './addresses.service'
 import { CreateAddressDto, UpdateAddressDto } from './dto/address.dto'
 
+@ApiTags('addresses')
 @Controller('addresses')
 @UseGuards(JwtAuthGuard)
 export class AddressesController {

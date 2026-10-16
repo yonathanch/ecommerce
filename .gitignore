@@ -33,3 +33,6 @@ coverage/
 
 # Misc
 *.tsbuildinfo
+
+# Internal docs (tidak ikut ke remote)
+/docs/

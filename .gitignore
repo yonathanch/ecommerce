@@ -12,6 +12,9 @@ frontend/next-env.d.ts
 backend/dist/
 backend/tsconfig.tsbuildinfo
 
+# Uploaded product images (runtime data)
+backend/uploads/
+
 # Env
 .env
 .env.local

@@ -17,6 +17,7 @@ import { PaymentsModule } from './payments/payments.module'
 import { NotificationsModule } from './notifications/notifications.module'
 import { ReviewsModule } from './reviews/reviews.module'
 import { AdminModule } from './admin/admin.module'
+import { UploadsModule } from './uploads/uploads.module'
 import { AppController } from './app.controller'
 import { AppService } from './app.service'
 
@@ -49,6 +50,7 @@ import { AppService } from './app.service'
     NotificationsModule,
     ReviewsModule,
     AdminModule,
+    UploadsModule,
   ],
   controllers: [AppController],
   providers: [

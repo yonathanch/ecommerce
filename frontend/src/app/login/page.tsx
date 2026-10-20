@@ -1,13 +1,12 @@
 import { LoginForm } from '@/app/auth/LoginForm'
-import Link from 'next/link'
+import type { Metadata } from 'next'
+
+export const metadata: Metadata = {
+  title: 'Masuk | OUTFITX',
+  description:
+    'Masuk ke akun OUTFITX untuk melanjutkan belanja, melacak pesanan, dan menyimpan produk favorit.',
+}
 
 export default function LoginPage() {
-  return (
-    <div className="min-h-screen flex flex-col justify-center">
-      <LoginForm />
-      <p className="text-center mt-4">
-        Belum punya akun? <Link href="/signup" className="text-blue-600 hover:underline">Daftar di sini</Link>
-      </p>
-    </div>
-  )
+  return <LoginForm />
 }

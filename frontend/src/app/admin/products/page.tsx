@@ -8,6 +8,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   ExternalLink,
+  ImagePlus,
   LayoutGrid,
   MoreVertical,
   Package,
@@ -15,6 +16,7 @@ import {
   Plus,
   Search,
   Trash2,
+  Upload,
 } from 'lucide-react'
 import apiClient from '@/lib/api-client'
 import { formatRupiah } from '@/lib/format'
@@ -91,6 +93,9 @@ const EMPTY_VARIANT: VariantRow = {
   isNew: true,
 }
 
+/** Mirrors the server-side multer cap so oversized files fail fast, before any upload starts. */
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
 const errorMessage = (e: any, fallback: string) => {
   const message = e?.response?.data?.message
   return Array.isArray(message) ? message.join(', ') : message ?? fallback
@@ -139,6 +144,7 @@ export default function AdminProductsPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [uploadingImage, setUploadingImage] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -191,6 +197,40 @@ export default function AdminProductsPage() {
   const reset = () => {
     setForm(EMPTY_FORM)
     setEditingId(null)
+  }
+
+  /**
+   * Product images are files, not pasted URLs: the picked file goes to
+   * POST /uploads/images straight away and the URL it returns is stored in
+   * form.imageUrl — the payload below (imageUrls) is unchanged.
+   */
+  const pickImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    // Clear so choosing the same file again (e.g. after "Hapus") still fires.
+    event.target.value = ''
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setError('File harus berupa gambar (JPG, PNG, WebP, atau GIF).')
+      return
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setError('Ukuran gambar maksimal 5 MB.')
+      return
+    }
+    setUploadingImage(true)
+    setError('')
+    try {
+      const body = new FormData()
+      body.append('file', file)
+      // postForm: the shared client defaults to Content-Type application/json,
+      // which would serialize FormData as JSON instead of sending multipart.
+      const res = await apiClient.postForm('/uploads/images', body)
+      setForm((current) => ({ ...current, imageUrl: res.data.url }))
+    } catch (e: any) {
+      setError(errorMessage(e, 'Gagal mengunggah gambar'))
+    } finally {
+      setUploadingImage(false)
+    }
   }
 
   const submit = async (event: React.FormEvent) => {
@@ -497,20 +537,62 @@ export default function AdminProductsPage() {
                 className="mt-1 w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none transition focus:border-neutral-400 focus:ring-2 focus:ring-neutral-400/40"
               />
             </label>
-            <label className="text-sm md:col-span-2">
+            <div className="text-sm md:col-span-2">
               <span className="block text-sm font-medium text-neutral-500">
-                URL gambar (opsional)
+                Gambar produk (opsional)
               </span>
-              {/* The field is the whole gallery: filling it replaces the stored
-                  image, emptying it removes the image. */}
-              <input
-                type="url"
-                value={form.imageUrl}
-                onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
-                placeholder="https://…"
-                className="mt-1 w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none transition focus:border-neutral-400 focus:ring-2 focus:ring-neutral-400/40"
-              />
-            </label>
+              {/*
+                Replaces the old "paste a URL" input: the file uploads on pick
+                and the returned URL fills form.imageUrl, so this stays the
+                whole gallery — picking one image replaces it, "Hapus" clears it.
+              */}
+              <div className="mt-1 flex items-center gap-3">
+                {form.imageUrl ? (
+                  <img
+                    src={form.imageUrl}
+                    alt="Pratinjau gambar produk"
+                    className="size-16 shrink-0 rounded-lg border border-neutral-200 bg-neutral-50 object-cover"
+                  />
+                ) : (
+                  <span className="flex size-16 shrink-0 items-center justify-center rounded-lg border border-dashed border-neutral-300 bg-neutral-50 text-neutral-400">
+                    <ImagePlus className="size-5" />
+                  </span>
+                )}
+                <div className="flex flex-col items-start gap-1.5">
+                  <div className="flex gap-2">
+                    <label
+                      className={`inline-flex h-9 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-900 transition hover:bg-neutral-100 ${
+                        uploadingImage ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+                      }`}
+                    >
+                      <input
+                        type="file"
+                        accept="image/*"
+                        disabled={uploadingImage}
+                        onChange={pickImage}
+                        className="sr-only"
+                      />
+                      <Upload className="size-4" />
+                      {form.imageUrl ? 'Ganti gambar' : 'Pilih gambar'}
+                    </label>
+                    {form.imageUrl && !uploadingImage && (
+                      <button
+                        type="button"
+                        onClick={() => setForm((current) => ({ ...current, imageUrl: '' }))}
+                        className="h-9 rounded-lg border border-neutral-200 bg-white px-3 text-sm font-medium text-rose-600 transition hover:bg-rose-50"
+                      >
+                        Hapus
+                      </button>
+                    )}
+                  </div>
+                  <span className="block text-xs text-neutral-500">
+                    {uploadingImage
+                      ? 'Mengunggah gambar…'
+                      : 'JPG, PNG, WebP, atau GIF — maksimal 5 MB. Kosongkan bila tanpa gambar.'}
+                  </span>
+                </div>
+              </div>
+            </div>
             <label className="text-sm md:col-span-3">
               <span className="block text-sm font-medium text-neutral-500">Deskripsi</span>
               <textarea
@@ -654,7 +736,7 @@ export default function AdminProductsPage() {
           <div className="mt-4 flex gap-2">
             <button
               type="submit"
-              disabled={busy}
+              disabled={busy || uploadingImage}
               className="h-9 rounded-lg bg-neutral-900 px-3 text-sm font-medium text-white transition hover:bg-neutral-900/80 disabled:opacity-50"
             >
               {editingId ? 'Simpan perubahan' : 'Tambah produk'}

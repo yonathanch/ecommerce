@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
+import { RefreshCw } from 'lucide-react'
 import apiClient from '@/lib/api-client'
 import {
   ORDER_STATUS_LABELS,
@@ -71,9 +72,11 @@ export default function AdminOverviewPage() {
         <button
           type="button"
           onClick={() => void load()}
-          className="h-9 rounded-lg border border-neutral-200 px-3 text-sm font-medium text-neutral-900 transition hover:bg-neutral-100"
+          aria-label="Muat ulang"
+          title="Muat ulang"
+          className="flex h-9 w-9 items-center justify-center rounded-lg border border-neutral-200 text-neutral-900 transition hover:bg-neutral-100"
         >
-          Muat ulang
+          <RefreshCw className="h-4 w-4" />
         </button>
       </div>
 

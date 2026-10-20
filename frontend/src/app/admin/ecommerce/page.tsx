@@ -102,10 +102,11 @@ export default function AdminEcommercePage() {
           <button
             type="button"
             onClick={() => void load()}
-            className="flex h-9 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 text-sm font-medium text-neutral-900 transition hover:bg-neutral-100"
+            aria-label="Muat ulang"
+            title="Muat ulang"
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-900 transition hover:bg-neutral-100"
           >
             <RefreshCw className="h-4 w-4" />
-            Muat ulang
           </button>
           <Link
             href="/admin/products?new=1"

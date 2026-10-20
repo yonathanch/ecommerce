@@ -1,9 +1,11 @@
 import { NestFactory } from '@nestjs/core';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { UPLOAD_DIR, UPLOAD_URL_PREFIX } from './uploads/uploads.constants';
 
 /**
  * Serve an OpenAPI 3 UI + JSON at `/api/docs`.
@@ -45,9 +47,21 @@ function setupSwagger(app: INestApplication) {
 
 async function bootstrap() {
   // rawBody keeps the untouched request body for HMAC webhook verification.
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
 
   app.use(cookieParser());
+
+  // Admin-uploaded product images (POST /api/uploads/images) are stored on
+  // disk and read back from here. This is middleware, not a Nest route, so the
+  // global `/api` prefix does not apply and the URLs saved on products stay
+  // short (`/uploads/<file>`). No directory index, 7-day cache headers.
+  app.useStaticAssets(UPLOAD_DIR, {
+    prefix: UPLOAD_URL_PREFIX,
+    index: false,
+    maxAge: '7d',
+  });
 
   // Security headers. We disable the CSP and COEP defaults because this is a
   // JSON API consumed by a separate Next.js app (different origin), not a

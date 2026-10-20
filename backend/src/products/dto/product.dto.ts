@@ -73,7 +73,10 @@ export class CreateProductDto {
   })
   @IsOptional()
   @IsArray()
-  @IsUrl({}, { each: true })
+  // require_tld: false so a locally uploaded image
+  // (http://localhost:3002/uploads/…) is a valid URL; shape and protocol are
+  // still validated.
+  @IsUrl({ require_tld: false }, { each: true })
   imageUrls?: string[]
 
   // Lazy () => Class form: the variant classes are declared below, and the
@@ -138,7 +141,8 @@ export class VariantInputDto {
 
   @ApiPropertyOptional({ example: 'https://picsum.photos/seed/v1/800/800' })
   @IsOptional()
-  @IsUrl()
+  // See CreateProductDto.imageUrls: localhost (no TLD) must pass in dev.
+  @IsUrl({ require_tld: false })
   imageUrl?: string
 }
 
@@ -209,7 +213,8 @@ export class UpdateProductDto {
   })
   @IsOptional()
   @IsArray()
-  @IsUrl({}, { each: true })
+  // Same rule as create: local upload URLs (no TLD) are valid.
+  @IsUrl({ require_tld: false }, { each: true })
   imageUrls?: string[]
 
   @ApiPropertyOptional({

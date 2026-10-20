@@ -411,7 +411,7 @@ export default function ProductDetailPage() {
                     aria-label={`Lihat foto ${index + 1}`}
                     className={`h-16 w-16 shrink-0 overflow-hidden rounded border-2 transition ${
                       index === selectedImage
-                        ? 'border-green-600'
+                        ? 'border-blue-600'
                         : 'border-transparent hover:border-gray-300'
                     }`}
                   >
@@ -489,7 +489,7 @@ export default function ProductDetailPage() {
                       onClick={() => setSelected((prev) => ({ ...prev, [axis]: value }))}
                       className={`flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition ${
                         isActive
-                          ? 'border-green-600 bg-green-50 font-medium text-green-700'
+                          ? 'border-blue-600 bg-blue-50 font-medium text-blue-700'
                           : 'border-gray-200 text-gray-700 hover:border-gray-400'
                       } ${outOfStock ? 'cursor-not-allowed opacity-40' : ''}`}
                     >
@@ -515,7 +515,7 @@ export default function ProductDetailPage() {
               Kondisi: <span className="font-medium text-gray-900">Baru</span>
             </p>
             <p className="mt-1 text-sm text-gray-500">
-              Kategori: <span className="font-medium text-green-700">{product.category}</span>
+              Kategori: <span className="font-medium text-blue-600">{product.category}</span>
             </p>
             {product.description && (
               <p className="mt-3 text-sm leading-relaxed text-gray-600">{product.description}</p>
@@ -612,7 +612,7 @@ export default function ProductDetailPage() {
                 <Button
                   onClick={handleAddToCart}
                   disabled={soldOut}
-                  className="h-11 w-full bg-green-600 text-base font-semibold hover:bg-green-700"
+                  className="h-11 w-full bg-blue-600 text-base font-semibold hover:bg-blue-700"
                 >
                   <ShoppingCart className="mr-2 h-5 w-5" />
                   + Keranjang
@@ -621,7 +621,7 @@ export default function ProductDetailPage() {
                   onClick={handleBuyNow}
                   disabled={soldOut || buying}
                   variant="outline"
-                  className="h-11 w-full border-green-600 text-base font-semibold text-green-700 hover:bg-green-50"
+                  className="h-11 w-full border-blue-600 text-base font-semibold text-blue-700 hover:bg-blue-50"
                 >
                   {buying ? 'Memproses…' : 'Beli Langsung'}
                 </Button>
@@ -631,7 +631,7 @@ export default function ProductDetailPage() {
               <div className="mt-4 flex items-center justify-center gap-2 border-t pt-4 text-sm text-gray-600">
                 <button
                   type="button"
-                  className="flex items-center gap-1.5 rounded px-2 py-1.5 transition hover:text-green-700"
+                  className="flex items-center gap-1.5 rounded px-2 py-1.5 transition hover:text-blue-700"
                 >
                   <MessageCircle className="h-4 w-4" /> Chat
                 </button>
@@ -640,7 +640,7 @@ export default function ProductDetailPage() {
                   type="button"
                   onClick={handleWishlist}
                   disabled={wishlistBusy}
-                  className={`flex items-center gap-1.5 rounded px-2 py-1.5 transition hover:text-green-700 ${
+                  className={`flex items-center gap-1.5 rounded px-2 py-1.5 transition hover:text-blue-700 ${
                     inWishlist ? 'text-red-600' : ''
                   }`}
                 >
@@ -651,7 +651,7 @@ export default function ProductDetailPage() {
                 <button
                   type="button"
                   onClick={handleShare}
-                  className="flex items-center gap-1.5 rounded px-2 py-1.5 transition hover:text-green-700"
+                  className="flex items-center gap-1.5 rounded px-2 py-1.5 transition hover:text-blue-700"
                 >
                   <Share2 className="h-4 w-4" /> Share
                 </button>
@@ -767,7 +767,7 @@ export default function ProductDetailPage() {
                     onChange={(e) => setReviewDraft((d) => ({ ...d, title: e.target.value }))}
                     placeholder="Ringkasan (opsional)"
                     maxLength={120}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-600"
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-600"
                   />
                   <textarea
                     value={reviewDraft.body}
@@ -776,13 +776,13 @@ export default function ProductDetailPage() {
                     rows={4}
                     maxLength={2000}
                     required
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-green-600"
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-600"
                   />
                   {reviewError && <p className="text-sm text-red-600">{reviewError}</p>}
                   <button
                     type="submit"
                     disabled={reviewBusy}
-                    className="h-9 rounded-md bg-green-600 px-4 text-sm font-semibold text-white transition hover:bg-green-700 disabled:opacity-50"
+                    className="h-9 rounded-md bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
                   >
                     {reviewBusy ? 'Mengirim…' : 'Kirim ulasan'}
                   </button>

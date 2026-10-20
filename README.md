@@ -17,15 +17,16 @@ Architecture: `Next.js → REST (fetch/axios) → NestJS (Controller → Service
 Implemented milestones: M1 foundation · M2 auth (JWT + refresh rotation + roles) · M3 catalog · M4 cart/wishlist/coupons ·
 M5 addresses/checkout · **M6 payments (signed webhooks, idempotency)** · **M7 inventory (reserve → deduct, ledger, low-stock alerts)** ·
 **M8 admin dashboard (`/admin`: stats, real analytics, orders + fulfilment state machine with shipments and tracking numbers,
-products with brand/gallery/variant editing, brands, categories, discounts, inventory, customers with order history)** ·
+products with brand, file-upload gallery and variant editing, brands, categories, discounts, inventory,
+customers with order history)** ·
 **M9 product reviews (purchase-verified buyers, admin moderation queue, storefront rating summary)** ·
 **M10 per-variant stock in the sales path (cart, holds, capture, refund and admin adjust all operate on the
 specific SKU; a variant product's stock is the derived sum of its SKUs)** ·
 **M11 admin notification bell and a working Ctrl+K palette (one cross-domain `/admin/search` query, the
 palette's rows linked to the screens that own them, and new-order/payment-failure events reaching every
 admin)**.
-Still open: Redis usage, BullMQ jobs, Socket.IO, TanStack Query migration, automated tests in CI and
-product image upload — see the limitation sections of the
+Still open: Redis usage, BullMQ jobs, Socket.IO, TanStack Query migration and automated tests in CI —
+see the limitation sections of the
 [M6/M7 report](docs/m6-m7-payment-inventory.md#8-potensi-masalah--keterbatasan) and the
 [M8 report](docs/m8-admin-dashboard.md#6-potensi-masalah--keterbatasan).
 
@@ -83,6 +84,7 @@ All routes are prefixed with `/api`. Authenticated routes need `Authorization: B
 |---|---|
 | Auth | `POST /auth/signup` · `POST /auth/login` · `POST /auth/refresh` · `POST /auth/logout` · `GET /auth/me` |
 | Catalog | `GET /products` · `GET /products/categories` · `GET /products/:id` · `POST|PUT|DELETE /products/:id` (ADMIN) |
+| Uploads | `POST /uploads/images` (ADMIN, multipart field `file`) — stored on disk and served back at `/uploads/<file>` |
 | Cart | `GET /cart` · `POST /cart/items` · `PUT|DELETE /cart/items/:productId` · `POST /cart/clear` |
 | Wishlist | `GET /wishlist` · `POST|DELETE /wishlist/items/:productId` · `POST /wishlist/items/:productId/toggle` |
 | Addresses | `GET /addresses` · `POST /addresses` · `PUT /addresses/:id` · `DELETE /addresses/:id` · `POST /addresses/:id/default` |
@@ -184,7 +186,8 @@ Signed-in staff (`ADMIN` role) manage the shop at `/admin`: overview metrics, a 
 (revenue and refunds, units sold, category breakdown, order-lifecycle funnel — all derived from paid
 orders, with no invented profit or visitor data), order fulfilment (`PAID → SHIPPED → DELIVERED` with
 courier and tracking number, refund restores stock through the inventory ledger), shipments with
-tracking-number corrections, product CRUD with brand/gallery/variant editing, brand, category and
+tracking-number corrections, product CRUD with brand/gallery/variant editing (the gallery is a file
+picker: the image is uploaded to `POST /uploads/images` and its returned URL is what gets stored), brand, category and
 coupon management, inventory adjustments with a reason, and the customer list with per-customer order
 history. Seeded admin: `admin@example.com` / `admin123`.
 

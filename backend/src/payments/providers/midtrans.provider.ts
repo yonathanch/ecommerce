@@ -62,6 +62,15 @@ export class MidtransProvider implements PaymentProvider {
     return process.env.MIDTRANS_IS_PRODUCTION === 'true'
   }
 
+  /**
+   * Where Snap sends the customer once the payment flow ends. Sent per
+   * transaction so it cannot be lost to a stale dashboard setting (which is
+   * how shoppers used to land on the documentation placeholder example.com).
+   */
+  private get frontendUrl(): string {
+    return (process.env.FRONTEND_URL ?? 'http://localhost:3000').replace(/\/+$/, '')
+  }
+
   private get apiBaseUrl(): string {
     return this.isProduction
       ? 'https://app.midtrans.com/snap/v1'
@@ -76,11 +85,15 @@ export class MidtransProvider implements PaymentProvider {
   async createCharge(request: ChargeRequest): Promise<ChargeResult> {
     const expiresAt = new Date(Date.now() + this.ttlMinutes * 60_000)
 
+    // This string is our providerRef AND the Snap `order_id`: the notification
+    // only ever carries `order_id` back, and the webhook resolves the payment
+    // by providerRef — so both sides must be this one value. The Snap token is
+    // only used to build the redirect URL.
+    const providerRef = `ORD-${request.orderId}-${Date.now().toString(36)}`
+
     const payload = {
       transaction_details: {
-        // providerRef slot: must stay unique per attempt and is echoed back as
-        // `order_id` in the notification.
-        order_id: `ORD-${request.orderId}-${Date.now().toString(36)}`,
+        order_id: providerRef,
         gross_amount: Math.round(request.amount),
       },
       item_details: [
@@ -94,6 +107,11 @@ export class MidtransProvider implements PaymentProvider {
       customer_details: {
         email: request.customer.email,
         first_name: request.customer.name || 'Customer',
+      },
+      callbacks: {
+        finish: `${this.frontendUrl}/orders`,
+        error: `${this.frontendUrl}/orders`,
+        unfinish: `${this.frontendUrl}/orders`,
       },
       expiry: {
         unit: 'minute',
@@ -126,9 +144,7 @@ export class MidtransProvider implements PaymentProvider {
     }
 
     return {
-      // The Snap token doubles as a stable providerRef; the notification's
-      // order_id matches it because we used it as order_id above.
-      providerRef: body.token,
+      providerRef,
       paymentUrl: body.redirect_url,
       expiresAt,
     }
@@ -141,14 +157,18 @@ export class MidtransProvider implements PaymentProvider {
    * constant-time to keep timing information out of an attacker's hands.
    */
   verifySignature(rawBody: Buffer, signature?: string): boolean {
-    if (!signature) return false
-
     let notification: MidtransNotification
     try {
       notification = JSON.parse(rawBody.toString('utf8'))
     } catch {
       return false
     }
+
+    // Midtrans puts the digest INSIDE the body (`signature_key`); it never sends
+    // a signature header. The argument path stays for our own signed test calls.
+    const provided = signature ?? notification.signature_key
+    if (!provided) return false
+
     if (!notification.order_id || !notification.status_code || !notification.gross_amount) {
       return false
     }
@@ -161,7 +181,7 @@ export class MidtransProvider implements PaymentProvider {
       .digest('hex')
 
     const a = Buffer.from(expected, 'utf8')
-    const b = Buffer.from(signature.toLowerCase(), 'utf8')
+    const b = Buffer.from(provided.toLowerCase(), 'utf8')
     if (a.length !== b.length) return false
     return timingSafeEqual(a, b)
   }

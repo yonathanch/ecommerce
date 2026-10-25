@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '@/context/AuthContext'
 import apiClient from '@/lib/api-client'
-import { startPayment, paymentErrorMessage } from '@/lib/payments'
+import { startPayment, paymentErrorMessage, paymentRedirectUrl } from '@/lib/payments'
 import { useRouter } from 'next/navigation'
 
 const formatAmount = (value: number | undefined) =>
@@ -58,7 +58,7 @@ export default function OrdersPage() {
     setActionError('')
     try {
       const payment = await startPayment(orderId)
-      window.location.href = `${payment.paymentUrl}?amount=${payment.amount}&order=${orderId}`
+      window.location.href = paymentRedirectUrl(payment, orderId)
     } catch (e) {
       setActionError(paymentErrorMessage(e))
       setBusyOrder('')

@@ -4,13 +4,11 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Mail } from 'lucide-react'
 import axios from '@/lib/api-client'
 import { useAuth } from '@/context/AuthContext'
 import { useRouter } from 'next/navigation'
 import {
   AuthError,
-  AuthInputIcon,
   AuthShell,
   AuthSubmitButton,
   AuthSwitch,
@@ -57,16 +55,13 @@ export function LoginForm() {
 
   return (
     <AuthShell
-      title="Masuk ke akunmu"
-      subtitle="Belanja lebih cepat, lacak pesanan, dan simpan produk favoritmu dalam satu akun."
-      panelEyebrow="OUTFITX Membership"
-      panelHeadline="Selamat datang kembali."
-      panelCopy="Masuk untuk melanjutkan belanja dan mengelola pesananmu dari satu tempat."
+      greeting="Selamat datang kembali !!!"
+      title="Masuk"
       footer={
         <AuthSwitch
           prompt="Belum punya akun?"
           href="/signup"
-          action="Daftar gratis"
+          action="Daftar"
         />
       }
     >
@@ -80,18 +75,15 @@ export function LoginForm() {
           >
             Email
           </label>
-          <div className="relative">
-            <AuthInputIcon icon={Mail} />
-            <input
-              id="login-email"
-              type="email"
-              autoComplete="email"
-              placeholder="nama@email.com"
-              className={authInputClass}
-              aria-invalid={errors.email ? true : undefined}
-              {...register('email')}
-            />
-          </div>
+          <input
+            id="login-email"
+            type="email"
+            autoComplete="email"
+            placeholder="nama@email.com"
+            className={authInputClass}
+            aria-invalid={errors.email ? true : undefined}
+            {...register('email')}
+          />
           <FieldError message={errors.email?.message} />
         </div>
 
@@ -113,7 +105,7 @@ export function LoginForm() {
           <FieldError message={errors.password?.message} />
         </div>
 
-        <div className="pt-1">
+        <div className="pt-2">
           <AuthSubmitButton busy={isSubmitting} busyLabel="Masuk…">
             Masuk
           </AuthSubmitButton>

@@ -4,13 +4,11 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Mail, User } from 'lucide-react'
 import axios from '@/lib/api-client'
 import { useAuth } from '@/context/AuthContext'
 import { useRouter } from 'next/navigation'
 import {
   AuthError,
-  AuthInputIcon,
   AuthShell,
   AuthSubmitButton,
   AuthSwitch,
@@ -67,16 +65,13 @@ export function SignupForm() {
 
   return (
     <AuthShell
-      title="Buat akun OUTFITX"
-      subtitle="Daftar gratis dalam semenit — langsung bisa checkout cepat dan simpan favoritmu."
-      panelEyebrow="Gratis & cepat"
-      panelHeadline="Buat akun, mulai gayamu."
-      panelCopy="Satu akun untuk belanja, wishlist, dan semua pesananmu — tanpa ribet."
+      greeting="Senang bertemu denganmu !!!"
+      title="Daftar"
       footer={
         <AuthSwitch
           prompt="Sudah punya akun?"
           href="/login"
-          action="Masuk di sini"
+          action="Masuk"
         />
       }
     >
@@ -90,18 +85,15 @@ export function SignupForm() {
           >
             Nama lengkap
           </label>
-          <div className="relative">
-            <AuthInputIcon icon={User} />
-            <input
-              id="signup-name"
-              type="text"
-              autoComplete="name"
-              placeholder="Nama sesuai identitas"
-              className={authInputClass}
-              aria-invalid={errors.name ? true : undefined}
-              {...register('name')}
-            />
-          </div>
+          <input
+            id="signup-name"
+            type="text"
+            autoComplete="name"
+            placeholder="Nama sesuai identitas"
+            className={authInputClass}
+            aria-invalid={errors.name ? true : undefined}
+            {...register('name')}
+          />
           <FieldError message={errors.name?.message} />
         </div>
 
@@ -112,18 +104,15 @@ export function SignupForm() {
           >
             Email
           </label>
-          <div className="relative">
-            <AuthInputIcon icon={Mail} />
-            <input
-              id="signup-email"
-              type="email"
-              autoComplete="email"
-              placeholder="nama@email.com"
-              className={authInputClass}
-              aria-invalid={errors.email ? true : undefined}
-              {...register('email')}
-            />
-          </div>
+          <input
+            id="signup-email"
+            type="email"
+            autoComplete="email"
+            placeholder="nama@email.com"
+            className={authInputClass}
+            aria-invalid={errors.email ? true : undefined}
+            {...register('email')}
+          />
           <FieldError message={errors.email?.message} />
         </div>
 
@@ -170,7 +159,7 @@ export function SignupForm() {
 
         <div className="pt-1">
           <AuthSubmitButton busy={isSubmitting} busyLabel="Mendaftar…">
-            Buat akun
+            Daftar
           </AuthSubmitButton>
         </div>
       </form>

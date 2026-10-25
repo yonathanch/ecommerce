@@ -2,122 +2,82 @@
 
 import { forwardRef, useState } from 'react'
 import Link from 'next/link'
-import {
-  CircleAlert,
-  Eye,
-  EyeOff,
-  Heart,
-  Lock,
-  PackageSearch,
-  ShieldCheck,
-  Truck,
-} from 'lucide-react'
+import { ArrowRight, CircleAlert, Eye, EyeOff } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /**
- * Shared shell for /login and /signup: a branded panel on the left (the store's
- * `mega-gradient`, same blue as the header wordmark) and the form on the right,
- * presented as one card on a soft backdrop — the layout big-fashion stores use
- * so the page still feels like the shop, not a generic auth widget.
+ * Shared shell for /login and /signup, styled after the split-screen auth
+ * mockup and filling the whole viewport: a slim bar carries the OUTFITX
+ * wordmark above the split, the form lives on a white left half, and a soft
+ * sky-blue ("biru muda") panel with the store's shopping illustration fills
+ * the right, separated by a thin blue divider.
  */
 export interface AuthShellProps {
+  greeting: string
   title: string
-  subtitle: string
-  panelEyebrow: string
-  panelHeadline: string
-  panelCopy: string
   children: React.ReactNode
   footer: React.ReactNode
 }
 
-/** Real store capabilities only — no invented policies or fake stats. */
-const BENEFITS = [
-  { icon: Truck, text: 'Pengiriman ke seluruh Indonesia' },
-  { icon: ShieldCheck, text: 'Pembayaran aman & terenkripsi' },
-  { icon: Heart, text: 'Simpan produk favorit di wishlist' },
-  { icon: PackageSearch, text: 'Lacak pesanan sampai depan pintu' },
-] as const
-
-export function AuthShell({
-  title,
-  subtitle,
-  panelEyebrow,
-  panelHeadline,
-  panelCopy,
-  children,
-  footer,
-}: AuthShellProps) {
+export function AuthShell({ greeting, title, children, footer }: AuthShellProps) {
   return (
-    <main className="flex min-h-[74vh] items-center justify-center bg-gradient-to-b from-blue-50/70 via-white to-neutral-50 px-4 py-10 sm:px-6 sm:py-14">
-      <div className="animate-fade-in-up grid w-full max-w-5xl overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-xl shadow-neutral-900/5 lg:grid-cols-[1.05fr_1fr]">
-        {/* ------------------------------------------------ brand panel */}
-        <aside className="mega-gradient relative overflow-hidden p-7 text-white sm:p-10">
-          <div
-            aria-hidden
-            className="pointer-events-none absolute -right-16 -top-16 size-56 rounded-full bg-white/10"
-          />
-          <div
-            aria-hidden
-            className="pointer-events-none absolute -bottom-24 -left-16 size-64 rounded-full bg-white/5"
-          />
-          <div className="relative">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-blue-100">
-              {panelEyebrow}
-            </p>
-            <h2 className="mt-3 text-2xl font-bold leading-snug tracking-tight sm:text-3xl">
-              {panelHeadline}
-            </h2>
-            <p className="mt-3 max-w-sm text-sm leading-relaxed text-blue-50/90">{panelCopy}</p>
+    <main className="flex min-h-screen flex-col bg-white">
+      {/* Top bar — the wordmark doubles as the way back to the storefront. */}
+      <header className="flex h-16 shrink-0 items-center bg-white px-6 sm:px-10 lg:px-14">
+        <Link
+          href="/"
+          aria-label="OUTFITX — kembali ke beranda"
+          className="text-2xl font-bold tracking-tight text-blue-600 transition hover:text-blue-700"
+        >
+          OUTFITX
+        </Link>
+      </header>
 
-            <ul className="mt-8 space-y-3.5">
-              {BENEFITS.map(({ icon: Icon, text }) => (
-                <li key={text} className="flex items-center gap-3 text-sm font-medium text-white/95">
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/15">
-                    <Icon className="size-4" />
-                  </span>
-                  {text}
-                </li>
-              ))}
-            </ul>
+      <div className="grid w-full flex-1 lg:grid-cols-[1.05fr_1fr]">
+        {/* --------------------------------------------------- form side */}
+        <div className="flex items-center justify-center px-6 py-10 sm:px-10 lg:px-14 lg:py-16">
+          <div className="w-full max-w-sm">
+            <p className="text-sm tracking-wide text-neutral-500">{greeting}</p>
+            <h1 className="mt-1 text-4xl font-extrabold tracking-tight text-neutral-900">
+              {title}
+            </h1>
 
-            <p className="mt-9 flex items-center gap-2 border-t border-white/15 pt-5 text-xs text-blue-100">
-              <Lock className="size-3.5 shrink-0" />
-              Data akunmu tersimpan aman dan tidak pernah dibagikan.
-            </p>
-          </div>
-        </aside>
+            <div className="mt-8">{children}</div>
 
-        {/* -------------------------------------------------- form panel */}
-        <div className="p-6 sm:p-10">
-          <h1 className="text-2xl font-bold tracking-tight text-neutral-900">{title}</h1>
-          <p className="mt-1.5 text-sm leading-relaxed text-neutral-500">{subtitle}</p>
-          <div className="mt-7">{children}</div>
-          <div className="mt-7 border-t border-neutral-100 pt-5 text-center text-sm text-neutral-500">
-            {footer}
+            <div className="mt-8 text-center text-sm text-neutral-500 lg:text-left">
+              {footer}
+            </div>
           </div>
         </div>
+
+        {/* ------------------------------------------- illustration panel */}
+        <aside className="relative block h-64 overflow-hidden border-t-[3px] border-sky-500 bg-sky-100 sm:h-80 lg:h-auto lg:border-l-[3px] lg:border-t-0">
+          {/* Square artboard anchored to the panel bottom; the top band masks
+              the stock illustration's baked-in title so only the scene shows. */}
+          <div className="absolute inset-x-0 bottom-0 aspect-square overflow-hidden">
+            <img
+              src="/auth-illustration.jpg"
+              alt="Ilustrasi belanja online OUTFITX"
+              className="h-full w-full object-cover object-bottom mix-blend-multiply"
+            />
+            <div aria-hidden className="absolute inset-x-0 top-0 h-[22%] bg-sky-100" />
+          </div>
+        </aside>
       </div>
     </main>
   )
 }
 
-/** Base field styles shared by every auth input. */
+/** Base field styles shared by every auth input — soft sky-tinted fill. */
 export const authInputClass = cn(
-  'h-11 w-full rounded-lg border border-neutral-300 bg-white pl-10 pr-3 text-sm text-neutral-900',
+  'h-12 w-full rounded-lg border border-sky-200 bg-sky-50/70 px-4 text-sm text-neutral-900',
   'placeholder:text-neutral-400 transition outline-none',
-  'focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10',
+  'focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-500/10',
 )
 
 const authErrorClass = 'border-rose-300 focus:border-rose-500 focus:ring-rose-500/10'
 
-/** Left-side field icon (mail, user, …) used by the plain text inputs. */
-export function AuthInputIcon({ icon: Icon }: { icon: React.ComponentType<{ className?: string }> }) {
-  return (
-    <Icon className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-neutral-400" />
-  )
-}
-
-/** Server/axios error rendered as a dismissible-looking alert above the fields. */
+/** Server/axios error rendered as an alert above the fields. */
 export function AuthError({ message }: { message: string }) {
   if (!message) return null
   return (
@@ -146,23 +106,22 @@ export const PasswordInput = forwardRef<HTMLInputElement, PasswordInputProps>(
   function PasswordInput({ hasError, className, ...props }, ref) {
     const [visible, setVisible] = useState(false)
     return (
-    <div className="relative">
-      <AuthInputIcon icon={Lock} />
-      <input
-        ref={ref}
-        type={visible ? 'text' : 'password'}
-        className={cn(authInputClass, 'pr-11', hasError && authErrorClass, className)}
-        {...props}
-      />
-      <button
-        type="button"
-        onClick={() => setVisible((current) => !current)}
-        aria-label={visible ? 'Sembunyikan password' : 'Tampilkan password'}
-        className="absolute right-1.5 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-600"
-      >
-        {visible ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-      </button>
-    </div>
+      <div className="relative">
+        <input
+          ref={ref}
+          type={visible ? 'text' : 'password'}
+          className={cn(authInputClass, 'pr-11', hasError && authErrorClass, className)}
+          {...props}
+        />
+        <button
+          type="button"
+          onClick={() => setVisible((current) => !current)}
+          aria-label={visible ? 'Sembunyikan password' : 'Tampilkan password'}
+          className="absolute right-1.5 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-neutral-400 transition hover:bg-sky-100 hover:text-sky-600"
+        >
+          {visible ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+        </button>
+      </div>
     )
   },
 )
@@ -192,7 +151,7 @@ export function humanizeAuthError(e: any, fallback: string): string {
   return message || fallback
 }
 
-/** Full-width primary action with a spinner while submitting. */
+/** Full-width pill primary action with a spinner while submitting. */
 export function AuthSubmitButton({
   busy,
   busyLabel,
@@ -206,7 +165,7 @@ export function AuthSubmitButton({
     <button
       type="submit"
       disabled={busy}
-      className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-blue-600 text-sm font-semibold text-white transition hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+      className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-sky-600 text-sm font-bold uppercase tracking-wide text-white transition hover:bg-sky-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-sky-500/30 disabled:cursor-not-allowed disabled:opacity-60"
     >
       {busy ? (
         <>
@@ -214,7 +173,10 @@ export function AuthSubmitButton({
           {busyLabel}
         </>
       ) : (
-        children
+        <>
+          {children}
+          <ArrowRight className="size-4" />
+        </>
       )}
     </button>
   )
@@ -238,7 +200,7 @@ export function AuthSwitch({ prompt, href, action }: { prompt: string; href: str
         {prompt}{' '}
         <Link
           href={href}
-          className="font-semibold text-blue-600 transition hover:text-blue-700 hover:underline"
+          className="font-semibold text-sky-600 transition hover:text-sky-700 hover:underline"
         >
           {action}
         </Link>

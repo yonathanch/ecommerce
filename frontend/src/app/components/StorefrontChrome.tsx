@@ -14,7 +14,10 @@ import { CategoryNavigation } from '@/app/components/CategoryNavigation'
  */
 export function StorefrontChrome() {
   const pathname = usePathname()
+  // Auth pages render their own full-screen split layout — the shop chrome
+  // would only crowd it, so it is skipped there too.
   if (pathname?.startsWith('/admin')) return null
+  if (pathname === '/login' || pathname === '/signup') return null
 
   return (
     <>

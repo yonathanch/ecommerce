@@ -7,6 +7,7 @@ export interface StartedPayment {
   paymentUrl: string
   amount: number
   status: string
+  provider?: string
   expiresAt?: string
 }
 
@@ -21,6 +22,20 @@ export interface StartedPayment {
 export async function startPayment(orderId: string): Promise<StartedPayment> {
   const res = await apiClient.post('/payments', { orderId })
   return res.data
+}
+
+/**
+ * Where to send the customer to pay.
+ *
+ * Only the local mock gateway needs the amount/order in the query string (it
+ * renders them); a real gateway's URL is used exactly as issued, since unknown
+ * query parameters on a hosted payment page are not ours to add.
+ */
+export function paymentRedirectUrl(payment: StartedPayment, orderId: string): string {
+  if (payment.provider === 'mock') {
+    return `${payment.paymentUrl}?amount=${payment.amount}&order=${orderId}`
+  }
+  return payment.paymentUrl
 }
 
 export function paymentErrorMessage(error: unknown): string {

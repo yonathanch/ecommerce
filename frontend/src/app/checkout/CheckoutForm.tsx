@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import apiClient from '@/lib/api-client'
 import { useCart } from '@/lib/cart-service'
-import { startPayment, paymentErrorMessage } from '@/lib/payments'
+import { startPayment, paymentErrorMessage, paymentRedirectUrl } from '@/lib/payments'
 
 interface Address {
   id: string
@@ -144,7 +144,7 @@ export function CheckoutForm({ onSuccess }: { onSuccess: () => void }) {
     try {
       const payment = await startPayment(order.id)
       // Hand the customer over to the gateway (sandbox page in development).
-      window.location.href = `${payment.paymentUrl}?amount=${payment.amount}&order=${order.id}`
+      window.location.href = paymentRedirectUrl(payment, order.id)
     } catch (e) {
       setPayError(paymentErrorMessage(e))
       setPaying(false)

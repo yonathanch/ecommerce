@@ -39,3 +39,7 @@ coverage/
 
 # Internal docs (tidak ikut ke remote)
 /docs/
+
+/template/orbynadmin/
+
+
